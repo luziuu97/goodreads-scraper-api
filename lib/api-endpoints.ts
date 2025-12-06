@@ -44,7 +44,7 @@ export interface Endpoint {
   codeSnippets: CodeSnippets;
 }
 
-export type ApiEndPointID = "get_book_details" | "get_author_details" | "get_author_books" | 'search_books' | 'get_book_lists' | 'get_book_quotes' | 'get_book_reviews' | 'get_user_shelves';
+export type ApiEndPointID = "get_book_details" | "get_author_details" | "get_author_books" | 'search_books' | 'get_book_lists' | 'get_book_quotes' | 'get_book_reviews' | 'get_user_shelves' | 'get_user_details';
 
 export const endpoints: Endpoint[] = [
   {

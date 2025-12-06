@@ -2,15 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
 const cheerio = require("cheerio");
 
+// Route segment config for caching
+// Revalidate every hour (3600 seconds)
+export const revalidate = 3600;
+
 export async function GET(req: NextRequest,   { params }: { params: { slug: string } }) {
   try {
     // Apply rate limiting
     await API_CONFIG.rateLimit.check(req, "get_book_details");
+    console.log("Rate limit applied");
   } catch {
-    return NextResponse.json(
+    const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
       { status: 429 }
     );
+    
+    // Don't cache rate limit responses
+    rateLimitResponse.headers.set('Cache-Control', 'no-store');
+    
+    return rateLimitResponse;
   }
 
   try {
@@ -26,6 +36,9 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     const series = $("h3.Text__italic").text();
     const seriesURL = $("h3.Text__italic > a").attr("href");
     const title = $('h1[data-testid="bookTitle"]').text();
+    const pagesText = $('[data-testid="pagesFormat"]').text();
+    const pagesMatch = pagesText.match(/(\d+)/);
+    const pages = pagesMatch ? parseInt(pagesMatch[1]) : null;
     const author = $(".ContributorLinksList > span > a")
       .map((i: number, el: any) => {
         const $el = $(el);
@@ -43,11 +56,14 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     const ratingCount = $('[data-testid="ratingsCount"]')
       .text()
       .split("rating")[0];
-    const reviewsCount = $('[data-testid="reviewsCount"]').text();
+    const reviewsCountText = $('[data-testid="reviewsCount"]').first().text();
+    // Remove duplicates if text is repeated (e.g., "190,601 reviews190,601 reviews" -> "190,601 reviews")
+    const reviewsCount = reviewsCountText.replace(/(.+?)\1+/, '$1').trim();
     const description = $('[data-testid="description"]').text();
     const genres = $('[data-testid="genresList"] > ul > span > span')
-      .map((i: number, el: any) => $(el).find("span").text().replace("Genres", ""))
-      .get();
+      .map((i: number, el: any) => $(el).find("span").text().replace("Genres", "").trim())
+      .get()
+      .filter((genre: string) => genre && genre.length > 0);
     const bookEdition = $('[data-testid="pagesFormat"]').text();
     const publishDate = $('[data-testid="publicationInfo"]').text();
     const related = $("div.DynamicCarousel__itemsArea > div > div")
@@ -175,13 +191,14 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     ).attr("href");
     const lastScraped = new Date().toISOString();
 
-    return NextResponse.json({
+    const apiResponse = NextResponse.json({
       success: true,
       scrapedURL: scrapeURL,
       book: {
         cover,
         series,
         seriesURL,
+        pages,
         slug,
         title,
         author,
@@ -203,11 +220,25 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
       }
     });
 
+    // Set cache headers for client-side caching
+    // Cache for 1 hour, allow stale-while-revalidate for 24 hours
+    apiResponse.headers.set(
+      'Cache-Control',
+      'public, s-maxage=3600, stale-while-revalidate=86400'
+    );
+
+    return apiResponse;
+
   } catch (error) {
-    return NextResponse.json({
+    const errorResponse = NextResponse.json({
       success: false,
       status: "Error - Invalid Query",
       error: error instanceof Error ? error.message : "Unknown error",
     }, { status: 404 });
+    
+    // Don't cache error responses
+    errorResponse.headers.set('Cache-Control', 'no-store');
+    
+    return errorResponse;
   }
 }
