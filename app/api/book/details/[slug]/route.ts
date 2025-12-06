@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
+import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
 const cheerio = require("cheerio");
 
 // Route segment config for caching
@@ -25,6 +26,20 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
 
   try {
     const { slug } = await params;
+    
+    // Check Redis cache
+    const cacheKey = generateCacheKey(req, "get_book_details", { slug });
+    const cachedData = await getCachedResponse(cacheKey);
+    
+    if (cachedData) {
+      const cachedResponse = NextResponse.json(cachedData);
+      cachedResponse.headers.set(
+        'Cache-Control',
+        'public, s-maxage=3600, stale-while-revalidate=86400'
+      );
+      cachedResponse.headers.set('X-Cache', 'HIT');
+      return cachedResponse;
+    }
     const scrapeURL = `https://www.goodreads.com/book/show/${slug}`;
 
 
@@ -226,6 +241,37 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
       'Cache-Control',
       'public, s-maxage=3600, stale-while-revalidate=86400'
     );
+    apiResponse.headers.set('X-Cache', 'MISS');
+
+    // Cache response in Redis for 4 hours
+    await setCachedResponse(cacheKey, {
+      success: true,
+      scrapedURL: scrapeURL,
+      book: {
+        cover,
+        series,
+        seriesURL,
+        pages,
+        slug,
+        title,
+        author,
+        rating,
+        ratingCount,
+        reviewsCount,
+        description,
+        genres,
+        bookEdition,
+        publishDate,
+        related,
+        reviewBreakdown,
+        reviews,
+        quotes,
+        quotesURL,
+        questions,
+        questionsURL,
+        lastScraped,
+      }
+    });
 
     return apiResponse;
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
+import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
 const cheerio = require("cheerio");
 
 export async function GET(
@@ -9,12 +10,24 @@ export async function GET(
   try {
     await API_CONFIG.rateLimit.check(req, "get_author_books");
   } catch {
-    return NextResponse.json({ error: "Too Many Requests" }, { status: 429 });
+    const rateLimitResponse = NextResponse.json({ error: "Too Many Requests" }, { status: 429 });
+    rateLimitResponse.headers.set('Cache-Control', 'no-store');
+    return rateLimitResponse;
   }
 
   try {
-    const { slug } = params;
+    const { slug } = await params;
     const { searchParams } = new URL(req.url);
+    
+    // Check Redis cache
+    const cacheKey = generateCacheKey(req, "get_author_books", { slug });
+    const cachedData = await getCachedResponse(cacheKey);
+    
+    if (cachedData) {
+      const cachedResponse = NextResponse.json(cachedData);
+      cachedResponse.headers.set('X-Cache', 'HIT');
+      return cachedResponse;
+    }
     
     // Get query parameters with defaults
     const page = parseInt(searchParams.get("page") || "1");
@@ -82,7 +95,7 @@ export async function GET(
     ).attr("href");
     const lastScraped = new Date().toISOString();
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       scrapedURL: scrapeURL,
       pagination: {
@@ -100,9 +113,16 @@ export async function GET(
         nextPage: nextPage,
         lastScraped: lastScraped,
       },
-    });
+    };
+
+    // Cache response in Redis for 4 hours
+    await setCachedResponse(cacheKey, responseData);
+
+    const apiResponse = NextResponse.json(responseData);
+    apiResponse.headers.set('X-Cache', 'MISS');
+    return apiResponse;
   } catch (error) {
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       {
         success: false,
         status: "Error - Invalid Query",
@@ -110,5 +130,7 @@ export async function GET(
       },
       { status: 404 }
     );
+    errorResponse.headers.set('Cache-Control', 'no-store');
+    return errorResponse;
   }
 }

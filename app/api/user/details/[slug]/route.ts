@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
+import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
 const cheerio = require("cheerio");
 
 export async function GET(
@@ -10,11 +11,24 @@ export async function GET(
     // Apply rate limiting
     await API_CONFIG.rateLimit.check(req, "get_user_details");
   } catch {
-    return NextResponse.json({ error: "Too Many Requests" }, { status: 429 });
+    const rateLimitResponse = NextResponse.json({ error: "Too Many Requests" }, { status: 429 });
+    rateLimitResponse.headers.set('Cache-Control', 'no-store');
+    return rateLimitResponse;
   }
 
   try {
     const { slug } = await params;
+    
+    // Check Redis cache
+    const cacheKey = generateCacheKey(req, "get_user_details", { slug });
+    const cachedData = await getCachedResponse(cacheKey);
+    
+    if (cachedData) {
+      const cachedResponse = NextResponse.json(cachedData);
+      cachedResponse.headers.set('X-Cache', 'HIT');
+      return cachedResponse;
+    }
+    
     const scrapeURL = `https://www.goodreads.com/user/show/${slug}`;
 
     const response = await fetchWithConfig(scrapeURL);
@@ -36,7 +50,9 @@ export async function GET(
     }
 
     if (privateProfile) {
-      return NextResponse.json({ error: "Private Profile" }, { status: 403 });
+      const privateResponse = NextResponse.json({ error: "Private Profile" }, { status: 403 });
+      privateResponse.headers.set('Cache-Control', 'no-store');
+      return privateResponse;
     }
 
     // Extract user profile information
@@ -338,7 +354,7 @@ export async function GET(
 
     const lastScraped = new Date().toISOString();
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       scrapedURL: scrapeURL,
       //signedUsername,
@@ -371,9 +387,16 @@ export async function GET(
         readingChallenge,
         lastScraped,
       },
-    });
+    };
+
+    // Cache response in Redis for 4 hours
+    await setCachedResponse(cacheKey, responseData);
+
+    const apiResponse = NextResponse.json(responseData);
+    apiResponse.headers.set('X-Cache', 'MISS');
+    return apiResponse;
   } catch (error) {
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       {
         success: false,
         status: "Error - Invalid Query",
@@ -381,5 +404,7 @@ export async function GET(
       },
       { status: 404 }
     );
+    errorResponse.headers.set('Cache-Control', 'no-store');
+    return errorResponse;
   }
 }

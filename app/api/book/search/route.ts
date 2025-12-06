@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
+import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
 const cheerio = require("cheerio");
 
 export async function GET(req: NextRequest) {
@@ -7,14 +8,26 @@ export async function GET(req: NextRequest) {
     // Apply rate limiting
     await API_CONFIG.rateLimit.check(req, "search_books");
   } catch {
-    return NextResponse.json(
+    const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
       { status: 429 }
     );
+    rateLimitResponse.headers.set('Cache-Control', 'no-store');
+    return rateLimitResponse;
   }
 
   try {
     const { searchParams } = new URL(req.url);
+    
+    // Check Redis cache
+    const cacheKey = generateCacheKey(req, "search_books");
+    const cachedData = await getCachedResponse(cacheKey);
+    
+    if (cachedData) {
+      const cachedResponse = NextResponse.json(cachedData);
+      cachedResponse.headers.set('X-Cache', 'HIT');
+      return cachedResponse;
+    }
     
     // Get and validate query parameter
     const query = searchParams.get("query");
@@ -138,17 +151,24 @@ export async function GET(req: NextRequest) {
       .toArray()
       .filter((book: any) => book !== null && book.title && book.title !== ""); // Filter out null/empty results
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       results: {
         query: query.trim(),
         totalResults: totalResults || books.length,
         books: books,
       },
-    });
+    };
+
+    // Cache response in Redis for 4 hours
+    await setCachedResponse(cacheKey, responseData);
+
+    const apiResponse = NextResponse.json(responseData);
+    apiResponse.headers.set('X-Cache', 'MISS');
+    return apiResponse;
 
   } catch (error) {
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       {
         success: false,
         status: "Error - Invalid Query",
@@ -156,6 +176,8 @@ export async function GET(req: NextRequest) {
       },
       { status: 404 }
     );
+    errorResponse.headers.set('Cache-Control', 'no-store');
+    return errorResponse;
   }
 }
 
