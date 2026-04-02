@@ -14,7 +14,7 @@ import {
   MessageSquare,
   Quote,
   Info,
-  Github,
+  GitBranch,
   AlertTriangle,
   ChevronDown,
   ChevronUp,
@@ -359,7 +359,7 @@ export function ApiSidebar({
                 className="w-full flex items-center justify-center gap-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border-slate-300 dark:border-slate-700"
                 onClick={handleReportIssue}
               >
-                <Github className="h-4 w-4" />
+                <GitBranch className="h-4 w-4" />
                 <span>Report Issue</span>
               </Button>
             </TooltipTrigger>

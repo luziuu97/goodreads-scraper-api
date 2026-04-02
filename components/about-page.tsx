@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ExternalLink, Github, Heart, BookOpen, Users, Code, Coffee } from "lucide-react"
+import { ExternalLink, GitBranch, Heart, BookOpen, Users, Code, Coffee } from "lucide-react"
 import { motion } from "framer-motion"
 import Link  from "next/link"
 
@@ -90,7 +90,7 @@ export function AboutPage() {
 
               <CardHeader>
                 <CardTitle className="flex items-center">
-                  <Github className="mr-2 h-5 w-5 text-emerald-500" />
+                  <GitBranch className="mr-2 h-5 w-5 text-emerald-500" />
                   GitHub Repository
                 </CardTitle>
               </CardHeader>

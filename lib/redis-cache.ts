@@ -71,13 +71,22 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
     return null;
   }
 
+  // Check if Redis is connected before attempting operations
+  if (client.status !== 'ready' && client.status !== 'connect') {
+    return null;
+  }
+
   try {
     const cached = await client.get(cacheKey);
     if (cached) {
       return JSON.parse(cached);
     }
   } catch (error) {
-    console.error('Redis get error:', error);
+    // Silently fail if Redis is not available - app should continue without cache
+    // Only log if it's not a connection-related error
+    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+      console.error('Redis get error:', error);
+    }
   }
 
   return null;
@@ -93,10 +102,19 @@ export async function setCachedResponse(cacheKey: string, data: any, ttl: number
     return;
   }
 
+  // Check if Redis is connected before attempting operations
+  if (client.status !== 'ready' && client.status !== 'connect') {
+    return;
+  }
+
   try {
     await client.setex(cacheKey, ttl, JSON.stringify(data));
   } catch (error) {
-    console.error('Redis set error:', error);
+    // Silently fail if Redis is not available - app should continue without cache
+    // Only log if it's not a connection-related error
+    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+      console.error('Redis set error:', error);
+    }
   }
 }
 
@@ -110,10 +128,19 @@ export async function deleteCachedResponse(cacheKey: string): Promise<void> {
     return;
   }
 
+  // Check if Redis is connected before attempting operations
+  if (client.status !== 'ready' && client.status !== 'connect') {
+    return;
+  }
+
   try {
     await client.del(cacheKey);
   } catch (error) {
-    console.error('Redis delete error:', error);
+    // Silently fail if Redis is not available - app should continue without cache
+    // Only log if it's not a connection-related error
+    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+      console.error('Redis delete error:', error);
+    }
   }
 }
 
@@ -127,13 +154,22 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
     return;
   }
 
+  // Check if Redis is connected before attempting operations
+  if (client.status !== 'ready' && client.status !== 'connect') {
+    return;
+  }
+
   try {
     const keys = await client.keys(`api:${endpoint}:*`);
     if (keys.length > 0) {
       await client.del(...keys);
     }
   } catch (error) {
-    console.error('Redis clear error:', error);
+    // Silently fail if Redis is not available - app should continue without cache
+    // Only log if it's not a connection-related error
+    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+      console.error('Redis clear error:', error);
+    }
   }
 }
 
