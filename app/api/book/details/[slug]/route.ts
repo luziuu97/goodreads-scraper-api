@@ -221,6 +221,60 @@ function findBookInApolloState(
   return null;
 }
 
+function isLikelyBlockedHtml(html: string): boolean {
+  const lower = html.toLowerCase();
+  return (
+    lower.includes("captcha") ||
+    lower.includes("verify you are human") ||
+    lower.includes("verify you're a human") ||
+    lower.includes("access denied") ||
+    lower.includes("request blocked") ||
+    lower.includes("cloudflare")
+  );
+}
+
+function hasMinimumBookSignals($: any): boolean {
+  const title = $('h1[data-testid="bookTitle"]').text().trim();
+  const authorCount = $(".ContributorLinksList > span > a").length;
+  const description = $('[data-testid="description"]').text().trim();
+  const ratings = $('[data-testid="ratingsCount"]').text().trim();
+
+  // We only need one strong text field + a core identity field to consider the page parseable.
+  const hasContent = Boolean(description || ratings);
+  return Boolean(title && authorCount > 0 && hasContent);
+}
+
+async function fetchParseableBookHtml(scrapeURL: string): Promise<string> {
+  const maxAttempts = 2;
+  let lastReason = "unknown";
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetchWithConfig(scrapeURL);
+    if (!response.ok) {
+      lastReason = `upstream_status_${response.status}`;
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        continue;
+      }
+      throw new Error(`Goodreads request failed with status ${response.status}`);
+    }
+
+    const htmlString = await response.text();
+    const $ = cheerio.load(htmlString);
+    const blocked = isLikelyBlockedHtml(htmlString);
+    const parseable = hasMinimumBookSignals($);
+
+    if (!blocked && parseable) return htmlString;
+
+    lastReason = blocked ? "blocked_html" : "insufficient_book_signals";
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+  }
+
+  throw new Error(`Failed to parse Goodreads book page: ${lastReason}`);
+}
+
 // Route segment config for caching
 // Revalidate every hour (3600 seconds)
 export const revalidate = 3600;
@@ -261,8 +315,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     const scrapeURL = `https://www.goodreads.com/book/show/${slug}`;
 
 
-    const response = await fetchWithConfig(scrapeURL);
-    const htmlString = await response.text();
+    const htmlString = await fetchParseableBookHtml(scrapeURL);
     const $ = cheerio.load(htmlString);
 
     const cover = $(".ResponsiveImage").attr("src");
@@ -278,7 +331,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     const pages =
       apolloDetails?.pages ??
       (pagesMatch ? parseInt(pagesMatch[1], 10) : null);
-    const author = $(".ContributorLinksList > span > a")
+    const contributors = $(".ContributorLinksList > span > a")
       .map((i: number, el: any) => {
         const $el = $(el);
         const name = $el
@@ -295,6 +348,18 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
         };
       })
       .toArray();
+    const translatorEntry = contributors.find((person: { name: string }) =>
+      /\(translator\)/i.test(person.name)
+    );
+    const translator = translatorEntry
+      ? {
+          ...translatorEntry,
+          name: translatorEntry.name.replace(/\s*\(translator\)\s*/i, "").trim(),
+        }
+      : null;
+    const author = contributors.filter(
+      (person: { name: string }) => !/\(translator\)/i.test(person.name)
+    );
     const rating = $("div.RatingStatistics__rating").text().slice(0, 4);
     const ratingCount = $('[data-testid="ratingsCount"]')
       .text()
@@ -452,6 +517,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
         slug,
         title,
         author,
+        translator,
         rating,
         ratingCount,
         reviewsCount,
@@ -496,6 +562,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
         slug,
         title,
         author,
+        translator,
         rating,
         ratingCount,
         reviewsCount,
