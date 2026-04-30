@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
 import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
+import { htmlToMarkdown } from "@/lib/html-to-markdown";
 const cheerio = require("cheerio");
 
 const MONTH_TO_MM: Record<string, string> = {
@@ -71,6 +72,18 @@ function digitsOnly(s: string | null | undefined): string | null {
   if (s == null || s === "") return null;
   const d = String(s).replace(/\D/g, "");
   return d || null;
+}
+
+function isTranslatorContributor(name: string): boolean {
+  return /\(translator\)/i.test(name);
+}
+
+function isIllustratorContributor(name: string): boolean {
+  return /\(illustrator\)/i.test(name);
+}
+
+function stripContributorRole(name: string, role: "translator" | "illustrator"): string {
+  return name.replace(new RegExp(`\\s*\\(${role}\\)\\s*`, "i"), "").trim();
 }
 
 type ApolloBookDetails = {
@@ -349,16 +362,24 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
       })
       .toArray();
     const translatorEntry = contributors.find((person: { name: string }) =>
-      /\(translator\)/i.test(person.name)
+      isTranslatorContributor(person.name)
     );
     const translator = translatorEntry
       ? {
           ...translatorEntry,
-          name: translatorEntry.name.replace(/\s*\(translator\)\s*/i, "").trim(),
+          name: stripContributorRole(translatorEntry.name, "translator"),
         }
       : null;
+    const illustrators = contributors
+      .filter((person: { name: string }) => isIllustratorContributor(person.name))
+      .map((person: { id: number; name: string; url: string }) => ({
+        ...person,
+        name: stripContributorRole(person.name, "illustrator"),
+      }));
     const author = contributors.filter(
-      (person: { name: string }) => !/\(translator\)/i.test(person.name)
+      (person: { name: string }) =>
+        !isTranslatorContributor(person.name) &&
+        !isIllustratorContributor(person.name)
     );
     const rating = $("div.RatingStatistics__rating").text().slice(0, 4);
     const ratingCount = $('[data-testid="ratingsCount"]')
@@ -367,7 +388,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     const reviewsCountText = $('[data-testid="reviewsCount"]').first().text();
     // Remove duplicates if text is repeated (e.g., "190,601 reviews190,601 reviews" -> "190,601 reviews")
     const reviewsCount = reviewsCountText.replace(/(.+?)\1+/, '$1').trim();
-    const description = $('[data-testid="description"]').text();
+    const description = htmlToMarkdown($('[data-testid="description"]').html());
     const genres = $('[data-testid="genresList"] > ul > span > span')
       .map((i: number, el: any) => $(el).find("span").text().replace("Genres", "").trim())
       .get()
@@ -518,6 +539,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
         title,
         author,
         translator,
+        illustrators,
         rating,
         ratingCount,
         reviewsCount,
@@ -563,6 +585,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
         title,
         author,
         translator,
+        illustrators,
         rating,
         ratingCount,
         reviewsCount,

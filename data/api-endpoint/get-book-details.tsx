@@ -26,6 +26,7 @@ export const getBookDetailsApiResponse = {
         url: "/author/show/566.Paulo_Coelho",
       },
     ],
+    illustrators: [],
     rating: "3.92",
     ratingCount: "3,363,456 ",
     reviewsCount: "135,508 reviews135,508 reviews",

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
 import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
+import { htmlToMarkdown } from "@/lib/html-to-markdown";
 const cheerio = require("cheerio");
 
 export async function GET(req: NextRequest,   { params }: { params: { slug: string } }) {
@@ -57,7 +58,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
 
     const birthDate = $("div.rightContainer > div[itemprop='birthDate']").text();
     const deathDate = $("div.rightContainer > div[itemprop='deathDate']").text();
-    const description = $(".aboutAuthorInfo > span").html();
+    const description = htmlToMarkdown($(".aboutAuthorInfo > span").html());
 
     const books = $("table.stacked > tbody > tr")
       .map((i: number, el: any) => {
