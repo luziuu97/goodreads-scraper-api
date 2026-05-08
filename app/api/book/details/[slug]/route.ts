@@ -311,6 +311,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
 
   try {
     const { slug } = await params;
+    const includeReviews = req.nextUrl.searchParams.get("reviews") === "true";
     
     // Check Redis cache
     const cacheKey = generateCacheKey(req, "get_book_details", { slug });
@@ -470,47 +471,49 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
       rating1: rating1,
     };
 
-    const reviews = $(".ReviewsList > div:nth-child(2) > div")
-      .filter(Boolean)
-      .map((i: number, el: any) => {
-        const $el = $(el);
-        const image = $el
-          .find("div > article > div > div > section > a > img")
-          .attr("src");
-        const author = $el
-          .find(
-            "div > article > div > div > section:nth-child(2) > span:nth-child(1) > div > a"
-          )
-          .text();
-        const date = $el
-          .find("div > article > section > section:nth-child(1) > span > a")
-          .text();
-        const stars = $el
-          .find("div > article > section > section:nth-child(1) > div > span")
-          .attr("aria-label");
-        const text = $el
-          .find(
-            "div > article > section > section:nth-child(2) > section > div > div > span"
-          )
-          .html();
-        const likes = $el
-          .find(
-            "div > article > section > footer > div > div:nth-child(1) > button > span"
-          )
-          .text();
-        const id = i + 1;
+    const reviews = includeReviews
+      ? $(".ReviewsList > div:nth-child(2) > div")
+          .filter(Boolean)
+          .map((i: number, el: any) => {
+            const $el = $(el);
+            const image = $el
+              .find("div > article > div > div > section > a > img")
+              .attr("src");
+            const author = $el
+              .find(
+                "div > article > div > div > section:nth-child(2) > span:nth-child(1) > div > a"
+              )
+              .text();
+            const date = $el
+              .find("div > article > section > section:nth-child(1) > span > a")
+              .text();
+            const stars = $el
+              .find("div > article > section > section:nth-child(1) > div > span")
+              .attr("aria-label");
+            const text = $el
+              .find(
+                "div > article > section > section:nth-child(2) > section > div > div > span"
+              )
+              .html();
+            const likes = $el
+              .find(
+                "div > article > section > footer > div > div:nth-child(1) > button > span"
+              )
+              .text();
+            const id = i + 1;
 
-        return {
-          id: id,
-          image: image,
-          author: author,
-          date: date,
-          stars: stars,
-          text: text,
-          likes: likes,
-        };
-      })
-      .toArray();
+            return {
+              id: id,
+              image: image,
+              author: author,
+              date: date,
+              stars: stars,
+              text: text,
+              likes: likes,
+            };
+          })
+          .toArray()
+      : undefined;
 
     const quotes = $(
       "div.BookDiscussions > div.BookDiscussions__list > a.DiscussionCard:nth-child(1) > div.DiscussionCard__middle > div.DiscussionCard__stats"
@@ -527,42 +530,46 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     ).attr("href");
     const lastScraped = new Date().toISOString();
 
-    const apiResponse = NextResponse.json({
+    const book = {
+      cover,
+      series,
+      seriesURL,
+      pages,
+      slug,
+      title,
+      author,
+      translator,
+      illustrators,
+      rating,
+      ratingCount,
+      reviewsCount,
+      description,
+      genres,
+      bookEdition,
+      publishDate,
+      isbn: apolloDetails?.isbn ?? null,
+      isbn10: apolloDetails?.isbn10 ?? null,
+      asin: apolloDetails?.asin ?? null,
+      language: apolloDetails?.language ?? null,
+      publishedBy: apolloDetails?.publishedBy ?? null,
+      type: apolloDetails?.type ?? null,
+      related,
+      reviewBreakdown,
+      quotes,
+      quotesURL,
+      questions,
+      questionsURL,
+      lastScraped,
+      ...(includeReviews ? { reviews } : {}),
+    };
+
+    const responseBody = {
       success: true,
       scrapedURL: scrapeURL,
-      book: {
-        cover,
-        series,
-        seriesURL,
-        pages,
-        slug,
-        title,
-        author,
-        translator,
-        illustrators,
-        rating,
-        ratingCount,
-        reviewsCount,
-        description,
-        genres,
-        bookEdition,
-        publishDate,
-        isbn: apolloDetails?.isbn ?? null,
-        isbn10: apolloDetails?.isbn10 ?? null,
-        asin: apolloDetails?.asin ?? null,
-        language: apolloDetails?.language ?? null,
-        publishedBy: apolloDetails?.publishedBy ?? null,
-        type: apolloDetails?.type ?? null,
-        related,
-        reviewBreakdown,
-        reviews,
-        quotes,
-        quotesURL,
-        questions,
-        questionsURL,
-        lastScraped,
-      }
-    });
+      book,
+    };
+
+    const apiResponse = NextResponse.json(responseBody);
 
     // Set cache headers for client-side caching
     // Cache for 1 hour, allow stale-while-revalidate for 24 hours
@@ -573,42 +580,7 @@ export async function GET(req: NextRequest,   { params }: { params: { slug: stri
     apiResponse.headers.set('X-Cache', 'MISS');
 
     // Cache response in Redis for 4 hours
-    await setCachedResponse(cacheKey, {
-      success: true,
-      scrapedURL: scrapeURL,
-      book: {
-        cover,
-        series,
-        seriesURL,
-        pages,
-        slug,
-        title,
-        author,
-        translator,
-        illustrators,
-        rating,
-        ratingCount,
-        reviewsCount,
-        description,
-        genres,
-        bookEdition,
-        publishDate,
-        isbn: apolloDetails?.isbn ?? null,
-        isbn10: apolloDetails?.isbn10 ?? null,
-        asin: apolloDetails?.asin ?? null,
-        language: apolloDetails?.language ?? null,
-        publishedBy: apolloDetails?.publishedBy ?? null,
-        type: apolloDetails?.type ?? null,
-        related,
-        reviewBreakdown,
-        reviews,
-        quotes,
-        quotesURL,
-        questions,
-        questionsURL,
-        lastScraped,
-      }
-    });
+    await setCachedResponse(cacheKey, responseBody);
 
     return apiResponse;
 

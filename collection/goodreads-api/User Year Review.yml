@@ -1,0 +1,23 @@
+info:
+  name: User Year Review
+  type: http
+  seq: 5
+
+http:
+  method: GET
+  url: "{{url}}/api/user/year-in-review/:userId"
+  params:
+    - name: reviews
+      value: "false"
+      type: query
+      disabled: true
+    - name: userId
+      value: "162488673"
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

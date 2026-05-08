@@ -101,8 +101,15 @@ export function ApiContent({ endpoint }: ApiContentProps) {
           throw new Error("Slug is required");
         }
 
+        const queryParams = new URLSearchParams();
+        if (params.reviews) queryParams.set("reviews", params.reviews);
+        const queryString = queryParams.toString();
+        const requestUrl = queryString
+          ? `/api/book/details/${slug}?${queryString}`
+          : `/api/book/details/${slug}`;
+
         const startTime = performance.now();
-        const response = await fetch(`/api/book/details/${slug}`);
+        const response = await fetch(requestUrl);
         const endTime = performance.now();
         setRequestTime(endTime - startTime);
 
