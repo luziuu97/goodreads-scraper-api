@@ -92,9 +92,12 @@ For complete documentation, visit our [API Documentation](https://api.goodreads-
 ## 📊 Rate Limits
 
 This API is completely free to use with the following limitations:
-- 100 requests per day per endpoint
+- Public endpoints default to 60 requests per hour per endpoint
+- Goodreads user import endpoints default to 5000 requests per hour per endpoint
 - Rate limits are tracked per IP address
 - Each endpoint has its own independent counter
+- Configure public limits with `RATE_LIMIT_INTERVAL`, `RATE_LIMIT_MAX_REQUESTS`, and `RATE_LIMIT_UNIQUE_TOKENS`
+- Configure import limits with `IMPORT_RATE_LIMIT_INTERVAL`, `IMPORT_RATE_LIMIT_MAX_REQUESTS`, and `IMPORT_RATE_LIMIT_UNIQUE_TOKENS`
 
 ### 🚀 Need Unlimited Access?
 

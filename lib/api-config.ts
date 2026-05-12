@@ -53,9 +53,13 @@ export const API_CONFIG = {
   userAgent: env("NEXT_PUBLIC_USER_AGENT") || 
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
   baseURL: "https://www.goodreads.com",
-  rateLimit: rateLimit({
-    interval: 24 * 60 * 60 * 1000, // 1 minute
-    uniqueTokenPerInterval: 500 // Max 500 users per minute
+  publicRateLimit: rateLimit({
+    interval: 24 * 60 * 60 * 1000, // 24 hours
+    uniqueTokenPerInterval: 500 // Max 500 endpoint+IP buckets per interval
+  }),
+  importRateLimit: rateLimit({
+    interval: 60 * 60 * 1000, // 1 hour
+    uniqueTokenPerInterval: 50000 // Max 50k endpoint+IP buckets per interval
   })
 };
 

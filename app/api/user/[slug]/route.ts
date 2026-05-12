@@ -9,7 +9,7 @@ export async function GET(
 ) {
   try {
     // Apply rate limiting
-    await API_CONFIG.rateLimit.check(req, "get_user_details");
+    await API_CONFIG.importRateLimit.checkImport(req, "get_user_details");
   } catch {
     const rateLimitResponse = NextResponse.json({ error: "Too Many Requests" }, { status: 429 });
     rateLimitResponse.headers.set('Cache-Control', 'no-store');

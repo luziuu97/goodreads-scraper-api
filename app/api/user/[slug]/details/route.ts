@@ -144,7 +144,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   try {
-    await API_CONFIG.rateLimit.check(req, "get_user_details_metadata");
+    await API_CONFIG.importRateLimit.checkImport(req, "get_user_details_metadata");
   } catch {
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },

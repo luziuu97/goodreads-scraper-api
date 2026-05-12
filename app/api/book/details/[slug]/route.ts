@@ -295,7 +295,7 @@ export const revalidate = 3600;
 export async function GET(req: NextRequest,   { params }: { params: { slug: string } }) {
   try {
     // Apply rate limiting
-    await API_CONFIG.rateLimit.check(req, "get_book_details");
+    await API_CONFIG.publicRateLimit.check(req, "get_book_details");
     console.log("Rate limit applied");
   } catch {
     const rateLimitResponse = NextResponse.json(

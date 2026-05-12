@@ -70,6 +70,7 @@ Retrieves detailed information about a specific book.
 - **Endpoint**: `GET /api/book/details/:slug`
 - **Parameters**:
   - `slug`: The book ID and title slug (e.g., `12345.Some_Book`).
+  - `reviews` (optional): Set to `true` to include scraped reviews. Omitted by default.
 
 ### Response Structure
 ```json
@@ -87,14 +88,13 @@ Retrieves detailed information about a specific book.
     "genres": [...],
     "publishDate": "...",
     "reviewBreakdown": { "rating5": "...", ... },
-    "reviews": [
-      { "author": "...", "stars": "...", "text": "...", "date": "...", "likes": "..." }
-    ],
     "quotes": "...",
     "questions": "..."
   }
 }
 ```
+
+When `reviews=true` is sent, the response also includes `book.reviews`.
 
 ## 3. Author Details
 Retrieves profile information for an author.

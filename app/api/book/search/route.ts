@@ -6,7 +6,7 @@ const cheerio = require("cheerio");
 export async function GET(req: NextRequest) {
   try {
     // Apply rate limiting
-    await API_CONFIG.rateLimit.check(req, "search_books");
+    await API_CONFIG.publicRateLimit.check(req, "search_books");
   } catch {
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
@@ -180,4 +180,3 @@ export async function GET(req: NextRequest) {
     return errorResponse;
   }
 }
-

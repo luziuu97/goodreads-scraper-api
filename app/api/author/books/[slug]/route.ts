@@ -8,7 +8,7 @@ export async function GET(
   { params }: { params: { slug: string } }
 ) {
   try {
-    await API_CONFIG.rateLimit.check(req, "get_author_books");
+    await API_CONFIG.publicRateLimit.check(req, "get_author_books");
   } catch {
     const rateLimitResponse = NextResponse.json({ error: "Too Many Requests" }, { status: 429 });
     rateLimitResponse.headers.set('Cache-Control', 'no-store');

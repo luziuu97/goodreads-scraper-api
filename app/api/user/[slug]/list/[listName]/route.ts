@@ -222,7 +222,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string; listName: string }> }
 ) {
   try {
-    await API_CONFIG.rateLimit.check(req, "get_user_list");
+    await API_CONFIG.importRateLimit.checkImport(req, "get_user_list");
   } catch {
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
