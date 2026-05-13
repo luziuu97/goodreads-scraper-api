@@ -1,11 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
-import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
-import { isLikelyBlockedOrChallengeHtml } from "@/lib/goodreads-blocked-html";
+import { API_CONFIG } from "@/lib/api-config";
+import { parseBookDetailsHtml } from "@/lib/goodreads-book-details";
 import { fetchGoodreadsSearchHtmlWithBrowser } from "@/lib/goodreads-search-browser";
 import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
 const cheerio = require("cheerio");
 
 export const runtime = "nodejs";
+
+function isBookDetailsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /\/book\/show\/\d+/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function buildSingleBookSearchResponse(query: string, htmlString: string, finalUrl: string) {
+  const { book } = parseBookDetailsHtml(htmlString, finalUrl);
+  const primaryAuthor =
+    Array.isArray(book.author) && book.author.length > 0
+      ? book.author[0]?.name || ""
+      : "";
+
+  return {
+    success: true,
+    results: {
+      query,
+      totalResults: 1,
+      books: [
+        {
+          id: book.slug.match(/^(\d+)/)?.[1] || "1",
+          title: book.title.trim(),
+          author: primaryAuthor,
+          cover: book.cover || "",
+          rating: book.rating ? parseFloat(book.rating) : undefined,
+          publicationDate: book.publishDate || undefined,
+          genres: Array.isArray(book.genres) && book.genres.length > 0 ? book.genres : undefined,
+        },
+      ],
+    },
+  };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -71,35 +107,37 @@ export async function GET(req: NextRequest) {
     const encodedQuery = encodeURIComponent(query.trim());
     const scrapeURL = `https://www.goodreads.com/search?q=${encodedQuery}&search_type=books`;
 
-    const response = await fetchWithConfig(scrapeURL);
-    let htmlString = await response.text();
+    let finalUrl = scrapeURL;
+    let htmlString = "";
 
-    if (isLikelyBlockedOrChallengeHtml(htmlString)) {
-      try {
-        htmlString = await fetchGoodreadsSearchHtmlWithBrowser(scrapeURL);
-      } catch (browserError) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              "Goodreads returned a bot-protection page (for example AWS WAF). The endpoint retried with Puppeteer, but the browser path was also blocked or could not launch. Provide a fresh GOODREADS_SESSION_COOKIE, keep request rates low, and make sure the deployment can run Chromium.",
-            details:
-              browserError instanceof Error ? browserError.message : "Unknown browser error",
-          },
-          { status: 503 }
-        );
-      }
+    try {
+      const browserResult = await fetchGoodreadsSearchHtmlWithBrowser(scrapeURL);
+      htmlString = browserResult.html;
+      finalUrl = browserResult.finalUrl || scrapeURL;
+    } catch (browserError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Goodreads search could not be completed through the browser flow.",
+          details:
+            browserError instanceof Error ? browserError.message : "Unknown browser error",
+        },
+        { status: 503 }
+      );
+    }
 
-      if (isLikelyBlockedOrChallengeHtml(htmlString)) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              "Goodreads returned a bot-protection page even after the Puppeteer fallback. This IP or browser fingerprint is still being challenged.",
-          },
-          { status: 503 }
-        );
-      }
+    if (isBookDetailsUrl(finalUrl)) {
+      const responseData = buildSingleBookSearchResponse(
+        query.trim(),
+        htmlString,
+        finalUrl
+      );
+
+      await setCachedResponse(cacheKey, responseData);
+
+      const apiResponse = NextResponse.json(responseData);
+      apiResponse.headers.set("X-Cache", "MISS");
+      return apiResponse;
     }
 
     const $ = cheerio.load(htmlString);

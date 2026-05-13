@@ -11,6 +11,7 @@ const NO_RESULTS_TEXT = "no results.";
 const CHALLENGE_PATTERNS = [
   "in order to continue, we need to verify that you're not a robot"
 ];
+const BOOK_DETAILS_PATH_PATTERN = /\/book\/show\/\d+/;
 
 declare global {
   // Reuse one browser per server process to avoid paying launch cost on every blocked request.
@@ -103,7 +104,7 @@ async function getBrowser(): Promise<Browser> {
 
 export async function fetchGoodreadsSearchHtmlWithBrowser(
   url: string
-): Promise<string> {
+): Promise<{ html: string; finalUrl: string }> {
   const browser = await getBrowser();
   const page = await browser.newPage();
 
@@ -136,8 +137,13 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
 
     const outcome = await page
       .waitForFunction(
-        (selector, challengePatterns, noResultsText) => {
+        (selector, challengePatterns, noResultsText, bookPathSource) => {
           const html = document.documentElement.outerHTML.toLowerCase();
+          const bookPathPattern = new RegExp(bookPathSource);
+
+          if (bookPathPattern.test(window.location.pathname)) {
+            return "book";
+          }
 
           if (document.querySelector(selector)) {
             return "results";
@@ -148,6 +154,7 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
           }
 
           if (challengePatterns.some((pattern) => html.includes(pattern))) {
+            debugger;
             return "challenge";
           }
 
@@ -163,17 +170,23 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
         { timeout: 45000, polling: 1000 },
         SEARCH_RESULTS_SELECTOR,
         CHALLENGE_PATTERNS,
-        NO_RESULTS_TEXT
+        NO_RESULTS_TEXT,
+        BOOK_DETAILS_PATH_PATTERN.source
       )
       .then((handle) => handle.jsonValue() as Promise<string>);
 
-    if (outcome === "no_results") {
-      return await page.content();
+    if (outcome === "no_results" || outcome === "book" || outcome === "results") {
+      return {
+        html: await page.content(),
+        finalUrl: page.url(),
+      };
     }
 
     if (outcome !== "results") {
       const currentUrl = page.url();
       const title = await page.title();
+      const content = await page.content();
+      console.log(content);
       const htmlSnippet = (await page.content())
         .replace(/\s+/g, " ")
         .slice(0, 500);
@@ -191,7 +204,10 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
       SEARCH_RESULTS_SELECTOR
     );
 
-    return await page.content();
+    return {
+      html: await page.content(),
+      finalUrl: page.url(),
+    };
   } finally {
     await page.close().catch(() => undefined);
   }

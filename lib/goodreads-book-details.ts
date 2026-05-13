@@ -77,6 +77,11 @@ export function extractLegacyIdFromSlug(slug: string): string | null {
   return m ? m[1] : null;
 }
 
+function extractSlugFromBookUrl(scrapeURL: string): string {
+  const match = scrapeURL.match(/\/book\/show\/([^?#/]+)/);
+  return match?.[1] ?? "";
+}
+
 function digitsOnly(s: string | null | undefined): string | null {
   if (s == null || s === "") return null;
   const d = String(s).replace(/\D/g, "");
@@ -271,10 +276,13 @@ async function fetchParseableBookHtml(scrapeURL: string): Promise<string> {
   throw new Error(`Failed to parse Goodreads book page: ${lastReason}`);
 }
 
-export async function scrapeBookDetails(slug: string, includeReviews = false) {
-  const scrapeURL = `https://www.goodreads.com/book/show/${slug}`;
-  const htmlString = await fetchParseableBookHtml(scrapeURL);
+export function parseBookDetailsHtml(
+  htmlString: string,
+  scrapeURL: string,
+  includeReviews = false
+) {
   const $ = cheerio.load(htmlString);
+  const slug = extractSlugFromBookUrl(scrapeURL);
 
   const cover = $(".ResponsiveImage").attr("src");
   const series = $("h3.Text__italic").text();
@@ -469,4 +477,10 @@ export async function scrapeBookDetails(slug: string, includeReviews = false) {
     scrapedURL: scrapeURL,
     book,
   };
+}
+
+export async function scrapeBookDetails(slug: string, includeReviews = false) {
+  const scrapeURL = `https://www.goodreads.com/book/show/${slug}`;
+  const htmlString = await fetchParseableBookHtml(scrapeURL);
+  return parseBookDetailsHtml(htmlString, scrapeURL, includeReviews);
 }

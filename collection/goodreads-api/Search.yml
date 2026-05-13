@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=9780241840740"
+  url: "{{url}}/api/book/search?query=love"
   params:
     - name: query
-      value: "9780241840740"
+      value: love
       type: query
   auth: inherit
 
