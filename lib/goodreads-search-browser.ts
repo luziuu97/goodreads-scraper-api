@@ -7,16 +7,9 @@ type LaunchOptions = import("puppeteer").LaunchOptions;
 
 const SEARCH_RESULTS_SELECTOR =
   "table.tableList > tbody > tr[itemtype='http://schema.org/Book']";
+const NO_RESULTS_TEXT = "no results.";
 const CHALLENGE_PATTERNS = [
-  "awswafintegration",
-  "challenge-container",
-  "awswaf.com",
-  "captcha",
-  "verify you are human",
-  "verify you're a human",
-  "access denied",
-  "request blocked",
-  "cloudflare",
+  "in order to continue, we need to verify that you're not a robot"
 ];
 
 declare global {
@@ -143,11 +136,15 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
 
     const outcome = await page
       .waitForFunction(
-        (selector, challengePatterns) => {
+        (selector, challengePatterns, noResultsText) => {
           const html = document.documentElement.outerHTML.toLowerCase();
 
           if (document.querySelector(selector)) {
             return "results";
+          }
+
+          if (html.includes(noResultsText)) {
+            return "no_results";
           }
 
           if (challengePatterns.some((pattern) => html.includes(pattern))) {
@@ -165,9 +162,14 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
         },
         { timeout: 45000, polling: 1000 },
         SEARCH_RESULTS_SELECTOR,
-        CHALLENGE_PATTERNS
+        CHALLENGE_PATTERNS,
+        NO_RESULTS_TEXT
       )
       .then((handle) => handle.jsonValue() as Promise<string>);
+
+    if (outcome === "no_results") {
+      return await page.content();
+    }
 
     if (outcome !== "results") {
       const currentUrl = page.url();

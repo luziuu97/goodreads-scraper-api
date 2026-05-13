@@ -2,8 +2,8 @@ import Redis from 'ioredis';
 import { NextRequest } from 'next/server';
 import { env } from 'next-runtime-env';
 
-// Cache TTL: 4 hours in seconds
-export const CACHE_TTL = 4 * 60 * 60; // 14400 seconds
+// Cache TTL: 1 week in seconds
+export const CACHE_TTL = 7 * 24 * 60 * 60; // 604800 seconds
 
 // Initialize Redis client
 let redis: Redis | null = null;
@@ -172,4 +172,3 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
     }
   }
 }
-
