@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
+import { isLikelyBlockedOrChallengeHtml } from "@/lib/goodreads-blocked-html";
+import { fetchGoodreadsSearchHtmlWithBrowser } from "@/lib/goodreads-search-browser";
 import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
 const cheerio = require("cheerio");
+
+export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
   try {
@@ -68,7 +72,36 @@ export async function GET(req: NextRequest) {
     const scrapeURL = `https://www.goodreads.com/search?q=${encodedQuery}&search_type=books`;
 
     const response = await fetchWithConfig(scrapeURL);
-    const htmlString = await response.text();
+    let htmlString = await response.text();
+
+    if (isLikelyBlockedOrChallengeHtml(htmlString)) {
+      try {
+        htmlString = await fetchGoodreadsSearchHtmlWithBrowser(scrapeURL);
+      } catch (browserError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Goodreads returned a bot-protection page (for example AWS WAF). The endpoint retried with Puppeteer, but the browser path was also blocked or could not launch. Provide a fresh GOODREADS_SESSION_COOKIE, keep request rates low, and make sure the deployment can run Chromium.",
+            details:
+              browserError instanceof Error ? browserError.message : "Unknown browser error",
+          },
+          { status: 503 }
+        );
+      }
+
+      if (isLikelyBlockedOrChallengeHtml(htmlString)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Goodreads returned a bot-protection page even after the Puppeteer fallback. This IP or browser fingerprint is still being challenged.",
+          },
+          { status: 503 }
+        );
+      }
+    }
+
     const $ = cheerio.load(htmlString);
 
     // Extract total results count if available

@@ -5,6 +5,7 @@ import {
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { scrapeBookDetails } from "@/lib/goodreads-book-details";
 const cheerio = require("cheerio");
 
 function normalizeText(value: string): string {
@@ -186,6 +187,47 @@ function parseUserIdentifier(identifier: string): string {
   return slugMatch ? slugMatch[1] : identifier;
 }
 
+function isTruthyParam(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return ["1", "true", "yes"].includes(value.toLowerCase());
+}
+
+function extractBookSlug(bookUrl: string, bookId: string): string | null {
+  if (bookUrl) {
+    const match = bookUrl.match(/\/book\/show\/([^?#/]+)/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return bookId || null;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const currentIndex = cursor++;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  );
+
+  return results;
+}
+
 function parseSortStateFromHeader($: any) {
   const activeHeader = $("#booksHeader th.header.field").filter((_: number, el: any) => {
     const node = $(el);
@@ -243,6 +285,7 @@ export async function GET(
       1,
       Math.min(100, Number(searchParams.get("per_page") || "100") || 100)
     );
+    const extended = isTruthyParam(searchParams.get("extended"));
     const sort = searchParams.get("sort") || "";
     const rawOrder = searchParams.get("order") || "";
     const order = rawOrder === "a" || rawOrder === "d" ? rawOrder : "";
@@ -252,6 +295,7 @@ export async function GET(
       listName: shelf,
       page: String(page),
       per_page: String(perPage),
+      extended: String(extended),
       sort,
       order,
     });
@@ -415,6 +459,31 @@ export async function GET(
       totalPages = resolvedCurrentPage;
     }
 
+    const booksWithDetails = extended
+      ? await mapWithConcurrency(books, 5, async (book: any) => {
+          const detailSlug = extractBookSlug(book.bookUrl, book.bookId);
+          if (!detailSlug) {
+            return {
+              ...book,
+              details: null,
+            };
+          }
+
+          try {
+            const { book: details } = await scrapeBookDetails(detailSlug, false);
+            return {
+              ...book,
+              details,
+            };
+          } catch {
+            return {
+              ...book,
+              details: null,
+            };
+          }
+        })
+      : books;
+
     const responseData = {
       success: true,
       scrapedURL: scrapeURL,
@@ -425,6 +494,7 @@ export async function GET(
         name: shelf,
         sort: resolvedSort,
         order: resolvedOrder,
+        extended,
       },
       pagination: {
         currentPage: resolvedCurrentPage,
@@ -433,7 +503,7 @@ export async function GET(
         hasNextPage,
         hasPreviousPage,
       },
-      books,
+      books: booksWithDetails,
       lastScraped: new Date().toISOString(),
     };
 

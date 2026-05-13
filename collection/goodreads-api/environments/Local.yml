@@ -1,4 +1,4 @@
 name: Local
 variables:
   - name: url
-    value: https://goodreads-scraper-api-production.up.railway.app
+    value: http://localhost:3000

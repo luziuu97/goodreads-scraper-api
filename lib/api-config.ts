@@ -1,7 +1,7 @@
 import { env } from "next-runtime-env";
 import { rateLimit } from "./rate-limit";
 
-function normalizeCookieHeader(rawCookie?: string): string | undefined {
+export function normalizeCookieHeader(rawCookie?: string): string | undefined {
   if (!rawCookie) return undefined;
 
   let value = rawCookie.trim();
@@ -63,7 +63,7 @@ export const API_CONFIG = {
   })
 };
 
-function getSessionCookie(): string | undefined {
+export function getSessionCookie(): string | undefined {
   return normalizeCookieHeader(
     process.env.GOODREADS_SESSION_COOKIE || env("GOODREADS_SESSION_COOKIE")
   );

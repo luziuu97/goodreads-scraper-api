@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, fetchWithConfig } from "@/lib/api-config";
 import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
+import { scrapeBookDetails } from "@/lib/goodreads-book-details";
 const cheerio = require("cheerio");
 
 /**
@@ -130,9 +131,47 @@ function parseDate($field: any): string | null {
   return text || null;
 }
 
+function isTruthyParam(value: string | null): boolean {
+  if (!value) return false;
+  return ["1", "true", "yes"].includes(value.toLowerCase());
+}
+
+function extractBookSlug(bookUrl: string, bookId: string): string | null {
+  if (bookUrl) {
+    const match = bookUrl.match(/\/book\/show\/([^?#/]+)/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return bookId || null;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const currentIndex = cursor++;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  );
+
+  return results;
+}
+
 export async function GET(
   req: NextRequest,
-  { params }: { params: { identifier: string } }
+  { params }: { params: Promise<{ identifier: string }> }
 ) {
   try {
     // Apply rate limiting
@@ -156,6 +195,7 @@ export async function GET(
     const page = pageParam ? Math.max(1, parseInt(pageParam)) : 1;
     const perPageParam = searchParams.get("per_page");
     const perPage = perPageParam ? Math.max(1, Math.min(100, parseInt(perPageParam))) : 100;
+    const extended = isTruthyParam(searchParams.get("extended"));
     
     // Check Redis cache
     const cacheKey = generateCacheKey(req, "get_user_list", {
@@ -163,6 +203,7 @@ export async function GET(
       shelf,
       page: page.toString(),
       per_page: perPage.toString(),
+      extended: String(extended),
     });
     const cachedData = await getCachedResponse(cacheKey);
     
@@ -419,12 +460,38 @@ export async function GET(
       }
     }
     
+    const booksWithDetails = extended
+      ? await mapWithConcurrency(books, 5, async (book: any) => {
+          const detailSlug = extractBookSlug(book.titleUrl, book.bookId);
+          if (!detailSlug) {
+            return {
+              ...book,
+              details: null,
+            };
+          }
+
+          try {
+            const { book: details } = await scrapeBookDetails(detailSlug, false);
+            return {
+              ...book,
+              details,
+            };
+          } catch {
+            return {
+              ...book,
+              details: null,
+            };
+          }
+        })
+      : books;
+
     const responseData = {
       success: true,
       scrapedURL: scrapeURL,
       user: {
         id: userId,
         shelf: shelf,
+        extended,
       },
       pagination: {
         currentPage: page,
@@ -432,7 +499,7 @@ export async function GET(
         hasNextPage: hasNextPage,
         hasPreviousPage: hasPreviousPage,
       },
-      books: books,
+      books: booksWithDetails,
       lastScraped: new Date().toISOString(),
     };
     
