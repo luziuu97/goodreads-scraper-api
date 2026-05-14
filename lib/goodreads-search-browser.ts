@@ -2,6 +2,7 @@ import { API_CONFIG, getSessionCookie } from "@/lib/api-config";
 
 type PuppeteerModule = typeof import("puppeteer");
 type Browser = import("puppeteer").Browser;
+type Page = import("puppeteer").Page;
 type CookieParam = import("puppeteer").CookieParam;
 type LaunchOptions = import("puppeteer").LaunchOptions;
 
@@ -12,6 +13,8 @@ const CHALLENGE_PATTERNS = [
   "in order to continue, we need to verify that you're not a robot"
 ];
 const BOOK_DETAILS_PATH_PATTERN = /\/book\/show\/\d+/;
+const CHALLENGE_RETRY_COUNT = 3;
+const CHALLENGE_RETRY_DELAY_MS = 1500;
 
 declare global {
   // Reuse one browser per server process to avoid paying launch cost on every blocked request.
@@ -102,33 +105,37 @@ async function getBrowser(): Promise<Browser> {
   return global.__goodreadsBrowserPromise;
 }
 
-export async function fetchGoodreadsSearchHtmlWithBrowser(
+async function prepareSearchPage(page: Page): Promise<void> {
+  await page.setViewport({ width: 1366, height: 900 });
+  await page.setUserAgent(API_CONFIG.userAgent);
+  await page.setExtraHTTPHeaders({
+    "Accept-Language": "en-US,en;q=0.9",
+  });
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => false,
+    });
+
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["en-US", "en"],
+    });
+  });
+
+  const sessionCookie = getSessionCookie();
+  const cookies = parseCookieHeader(sessionCookie);
+  if (cookies.length > 0) {
+    await page.setCookie(...cookies);
+  }
+}
+
+async function runSearchAttempt(
+  browser: Browser,
   url: string
-): Promise<{ html: string; finalUrl: string }> {
-  const browser = await getBrowser();
+): Promise<{ html: string; finalUrl: string; outcome: string }> {
   const page = await browser.newPage();
 
   try {
-    await page.setViewport({ width: 1366, height: 900 });
-    await page.setUserAgent(API_CONFIG.userAgent);
-    await page.setExtraHTTPHeaders({
-      "Accept-Language": "en-US,en;q=0.9",
-    });
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", {
-        get: () => false,
-      });
-
-      Object.defineProperty(navigator, "languages", {
-        get: () => ["en-US", "en"],
-      });
-    });
-
-    const sessionCookie = getSessionCookie();
-    const cookies = parseCookieHeader(sessionCookie);
-    if (cookies.length > 0) {
-      await page.setCookie(...cookies);
-    }
+    await prepareSearchPage(page);
 
     await page.goto(url, {
       waitUntil: "domcontentloaded",
@@ -154,7 +161,6 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
           }
 
           if (challengePatterns.some((pattern) => html.includes(pattern))) {
-            debugger;
             return "challenge";
           }
 
@@ -175,40 +181,61 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
       )
       .then((handle) => handle.jsonValue() as Promise<string>);
 
-    if (outcome === "no_results" || outcome === "book" || outcome === "results") {
-      return {
-        html: await page.content(),
-        finalUrl: page.url(),
-      };
-    }
-
-    if (outcome !== "results") {
-      const currentUrl = page.url();
-      const title = await page.title();
-      const content = await page.content();
-      console.log(content);
-      const htmlSnippet = (await page.content())
-        .replace(/\s+/g, " ")
-        .slice(0, 500);
-
-      throw new Error(
-        `Browser reached ${outcome} state at ${currentUrl} (title: ${title}). HTML snippet: ${htmlSnippet}`
+    if (outcome === "results") {
+      await page.waitForFunction(
+        (selector) => {
+          return document.querySelectorAll(selector).length > 0;
+        },
+        { timeout: 5000 },
+        SEARCH_RESULTS_SELECTOR
       );
     }
-
-    await page.waitForFunction(
-      (selector) => {
-        return document.querySelectorAll(selector).length > 0;
-      },
-      { timeout: 5000 },
-      SEARCH_RESULTS_SELECTOR
-    );
 
     return {
       html: await page.content(),
       finalUrl: page.url(),
+      outcome,
     };
   } finally {
     await page.close().catch(() => undefined);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function fetchGoodreadsSearchHtmlWithBrowser(
+  url: string
+): Promise<{ html: string; finalUrl: string }> {
+  const browser = await getBrowser();
+
+  let lastAttempt: { html: string; finalUrl: string; outcome: string } | null = null;
+
+  for (let attempt = 1; attempt <= CHALLENGE_RETRY_COUNT + 1; attempt += 1) {
+    lastAttempt = await runSearchAttempt(browser, url);
+
+    if (
+      lastAttempt.outcome === "no_results" ||
+      lastAttempt.outcome === "book" ||
+      lastAttempt.outcome === "results"
+    ) {
+      return {
+        html: lastAttempt.html,
+        finalUrl: lastAttempt.finalUrl,
+      };
+    }
+
+    if (lastAttempt.outcome === "challenge" && attempt <= CHALLENGE_RETRY_COUNT) {
+      await sleep(CHALLENGE_RETRY_DELAY_MS);
+      continue;
+    }
+
+    const htmlSnippet = lastAttempt.html.replace(/\s+/g, " ").slice(0, 500);
+    throw new Error(
+      `Browser reached ${lastAttempt.outcome} state at ${lastAttempt.finalUrl} after ${attempt} attempt(s). HTML snippet: ${htmlSnippet}`
+    );
+  }
+
+  throw new Error("Goodreads search failed without a browser outcome");
 }

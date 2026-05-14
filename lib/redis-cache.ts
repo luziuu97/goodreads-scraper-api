@@ -1,4 +1,5 @@
 import Redis from 'ioredis';
+import { LRUCache } from 'lru-cache';
 import { NextRequest } from 'next/server';
 import { env } from 'next-runtime-env';
 
@@ -7,6 +8,10 @@ export const CACHE_TTL = 7 * 24 * 60 * 60; // 604800 seconds
 
 // Initialize Redis client
 let redis: Redis | null = null;
+const memoryCache = new LRUCache<string, string>({
+  max: 1000,
+  ttl: CACHE_TTL * 1000,
+});
 
 function getRedisClient(): Redis | null {
   // If Redis is not configured, return null (cache will be disabled)
@@ -65,6 +70,11 @@ export function generateCacheKey(req: NextRequest, endpoint: string, params?: Re
  * Get cached response
  */
 export async function getCachedResponse(cacheKey: string): Promise<any | null> {
+  const memoryCached = memoryCache.get(cacheKey);
+  if (memoryCached) {
+    return JSON.parse(memoryCached);
+  }
+
   const client = getRedisClient();
   
   if (!client) {
@@ -79,6 +89,7 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   try {
     const cached = await client.get(cacheKey);
     if (cached) {
+      memoryCache.set(cacheKey, cached);
       return JSON.parse(cached);
     }
   } catch (error) {
@@ -96,6 +107,10 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
  * Set cached response
  */
 export async function setCachedResponse(cacheKey: string, data: any, ttl: number = CACHE_TTL): Promise<void> {
+  memoryCache.set(cacheKey, JSON.stringify(data), {
+    ttl: ttl * 1000,
+  });
+
   const client = getRedisClient();
   
   if (!client) {
@@ -122,6 +137,8 @@ export async function setCachedResponse(cacheKey: string, data: any, ttl: number
  * Delete cached response
  */
 export async function deleteCachedResponse(cacheKey: string): Promise<void> {
+  memoryCache.delete(cacheKey);
+
   const client = getRedisClient();
   
   if (!client) {
@@ -148,6 +165,12 @@ export async function deleteCachedResponse(cacheKey: string): Promise<void> {
  * Clear all cache for an endpoint
  */
 export async function clearEndpointCache(endpoint: string): Promise<void> {
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(`api:${endpoint}:`)) {
+      memoryCache.delete(key);
+    }
+  }
+
   const client = getRedisClient();
   
   if (!client) {
