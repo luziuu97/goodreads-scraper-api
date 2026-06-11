@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
+import { getBookDetailsByProvider, parseProvider } from "@/lib/book-providers";
 import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
-import { scrapeBookDetails } from "@/lib/goodreads-book-details";
 
 export const revalidate = 3600;
 
@@ -24,6 +24,7 @@ export async function GET(
   try {
     const { slug } = await params;
     const includeReviews = req.nextUrl.searchParams.get("reviews") === "true";
+    const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
 
     const cacheKey = generateCacheKey(req, "get_book_details", { slug });
     const cachedData = await getCachedResponse(cacheKey);
@@ -38,12 +39,11 @@ export async function GET(
       return cachedResponse;
     }
 
-    const { scrapedURL, book } = await scrapeBookDetails(slug, includeReviews);
-    const responseBody = {
-      success: true,
-      scrapedURL,
-      book,
-    };
+    const responseBody = await getBookDetailsByProvider({
+      provider,
+      slug,
+      includeReviews,
+    });
 
     const apiResponse = NextResponse.json(responseBody);
     apiResponse.headers.set(
@@ -56,13 +56,22 @@ export async function GET(
 
     return apiResponse;
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    const status =
+      message.includes("Invalid provider parameter") ||
+      message.includes("reviews=true option is only supported")
+        ? 400
+        : message.includes("HARDCOVER_API_TOKEN")
+          ? 503
+          : 404;
+
     const errorResponse = NextResponse.json(
       {
         success: false,
         status: "Error - Invalid Query",
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: message,
       },
-      { status: 404 }
+      { status }
     );
     errorResponse.headers.set("Cache-Control", "no-store");
     return errorResponse;

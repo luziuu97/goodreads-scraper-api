@@ -68,6 +68,12 @@ fetch(`https://api.goodreads-scraper.com/api/search?query=${encodeURIComponent(s
 .catch(error => console.error('Error searching books:', error));
 ```
 
+To search Hardcover instead of Goodreads, add `provider=hardcover`:
+
+```javascript
+fetch(`https://api.goodreads-scraper.com/api/search?query=${encodeURIComponent(searchQuery)}&provider=hardcover&limit=${limit}`)
+```
+
 ### Get Book Lists
 
 ```javascript
@@ -117,7 +123,14 @@ npm install
 # Start the development server
 npm run dev
 
-``
+```
+
+### Optional environment variables
+
+- `GOODREADS_SESSION_COOKIE`: improves Goodreads scraping reliability for pages that challenge anonymous traffic
+- `HARDCOVER_API_TOKEN`: required for `provider=hardcover` requests
+- `REDIS_URL`: enables shared response caching
+- `DISABLE_REDIS=true`: disables Redis usage even if `REDIS_URL` is set
 
 ## 🔄 Response Format
 

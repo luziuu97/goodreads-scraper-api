@@ -5,13 +5,16 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/details/:bookId?reviews=false"
+  url: "{{url}}/api/book/details/:bookId?reviews=false&provider=hardcover"
   params:
     - name: reviews
       value: "false"
       type: query
+    - name: provider
+      value: hardcover
+      type: query
     - name: bookId
-      value: "207567925"
+      value: "240201437"
       type: path
   auth: inherit
 

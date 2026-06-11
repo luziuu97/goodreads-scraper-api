@@ -16,6 +16,13 @@ export const searchBooksApiParameters: Parameter[] = [
     options: ["all", "title", "author", "isbn"],
   },
   {
+    name: "provider",
+    type: "select",
+    required: false,
+    description: "Book data source to query",
+    options: ["goodreads", "hardcover"],
+  },
+  {
     name: "limit",
     type: "number",
     required: false,
@@ -26,12 +33,14 @@ export const searchBooksApiParameters: Parameter[] = [
 
 export const searchBooksApiResponse = {
   success: true,
+  provider: "goodreads",
   results: {
     query: "fourth wing",
     totalResults: 15,
     books: [
       {
         id: "58490567",
+        provider: "goodreads",
         title: "Fourth Wing",
         author: "Rebecca Yarros",
         cover: "https://images.gr-assets.com/books/1676401063m/58490567.jpg",
@@ -41,6 +50,7 @@ export const searchBooksApiResponse = {
       },
       {
         id: "123456789",
+        provider: "goodreads",
         title: "Fourth Wing: The Empyrean Collector's Edition",
         author: "Rebecca Yarros",
         cover: "https://images.gr-assets.com/books/1234567890m/123456789.jpg",

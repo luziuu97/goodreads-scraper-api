@@ -13,7 +13,16 @@ const memoryCache = new LRUCache<string, string>({
   ttl: CACHE_TTL * 1000,
 });
 
+function isRedisDisabled(): boolean {
+  const value = process.env.DISABLE_REDIS || env('DISABLE_REDIS');
+  return value?.toLowerCase() === 'true';
+}
+
 function getRedisClient(): Redis | null {
+  if (isRedisDisabled()) {
+    return null;
+  }
+
   // If Redis is not configured, return null (cache will be disabled)
   const redisUrl = process.env.REDIS_URL || env('REDIS_URL');
   

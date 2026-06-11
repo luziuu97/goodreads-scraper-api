@@ -15,6 +15,8 @@ const CHALLENGE_PATTERNS = [
 const BOOK_DETAILS_PATH_PATTERN = /\/book\/show\/\d+/;
 const CHALLENGE_RETRY_COUNT = 3;
 const CHALLENGE_RETRY_DELAY_MS = 1500;
+const FORBIDDEN_RETRY_COUNT = 3;
+const FORBIDDEN_RETRY_DELAY_MS = 1500;
 
 declare global {
   // Reuse one browser per server process to avoid paying launch cost on every blocked request.
@@ -131,16 +133,27 @@ async function prepareSearchPage(page: Page): Promise<void> {
 async function runSearchAttempt(
   browser: Browser,
   url: string
-): Promise<{ html: string; finalUrl: string; outcome: string }> {
+): Promise<{ html: string; finalUrl: string; outcome: string; status: number | null }> {
   const page = await browser.newPage();
 
   try {
     await prepareSearchPage(page);
 
-    await page.goto(url, {
+    const response = await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: 45000,
     });
+
+    const status = response?.status() ?? null;
+
+    if (status === 403) {
+      return {
+        html: await page.content(),
+        finalUrl: page.url(),
+        outcome: "forbidden",
+        status,
+      };
+    }
 
     const outcome = await page
       .waitForFunction(
@@ -195,6 +208,7 @@ async function runSearchAttempt(
       html: await page.content(),
       finalUrl: page.url(),
       outcome,
+      status,
     };
   } finally {
     await page.close().catch(() => undefined);
@@ -210,9 +224,15 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
 ): Promise<{ html: string; finalUrl: string }> {
   const browser = await getBrowser();
 
-  let lastAttempt: { html: string; finalUrl: string; outcome: string } | null = null;
+  let lastAttempt: {
+    html: string;
+    finalUrl: string;
+    outcome: string;
+    status: number | null;
+  } | null = null;
+  const maxAttempts = Math.max(CHALLENGE_RETRY_COUNT, FORBIDDEN_RETRY_COUNT) + 1;
 
-  for (let attempt = 1; attempt <= CHALLENGE_RETRY_COUNT + 1; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     lastAttempt = await runSearchAttempt(browser, url);
 
     if (
@@ -231,9 +251,15 @@ export async function fetchGoodreadsSearchHtmlWithBrowser(
       continue;
     }
 
+    if (lastAttempt.outcome === "forbidden" && attempt <= FORBIDDEN_RETRY_COUNT) {
+      await sleep(FORBIDDEN_RETRY_DELAY_MS);
+      continue;
+    }
+
     const htmlSnippet = lastAttempt.html.replace(/\s+/g, " ").slice(0, 500);
     throw new Error(
-      `Browser reached ${lastAttempt.outcome} state at ${lastAttempt.finalUrl} after ${attempt} attempt(s). HTML snippet: ${htmlSnippet}`
+      `Browser reached ${lastAttempt.outcome} state at ${lastAttempt.finalUrl} after ${attempt} attempt(s)` +
+        `${lastAttempt.status ? ` with status ${lastAttempt.status}` : ""}. HTML snippet: ${htmlSnippet}`
     );
   }
 

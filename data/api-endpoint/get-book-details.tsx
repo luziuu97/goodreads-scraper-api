@@ -9,6 +9,13 @@ export const getBookDetailsApiParameters = [
     placeholder: "18144590-the-alchemist",
   },
   {
+    name: "provider",
+    type: "select",
+    required: false,
+    description: "Book data source to query",
+    options: ["goodreads", "hardcover"],
+  },
+  {
     name: "reviews",
     type: "select",
     required: false,
@@ -20,8 +27,10 @@ export const getBookDetailsApiParameters = [
 
 export const getBookDetailsApiResponse = {
   success: true,
+  provider: "goodreads",
   scrapedURL: "https://www.goodreads.com/book/show/18144590-the-alchemist",
   book: {
+    provider: "goodreads",
     cover:
       "https://images-na.ssl-images-amazon.com/images/S/compressed.photo.goodreads.com/books/1654371463i/18144590.jpg",
     series: "",

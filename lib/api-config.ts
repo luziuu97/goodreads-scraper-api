@@ -69,6 +69,11 @@ export function getSessionCookie(): string | undefined {
   );
 }
 
+export function getHardcoverApiToken(): string | undefined {
+  const token = process.env.HARDCOVER_API_TOKEN || env("HARDCOVER_API_TOKEN");
+  return token?.trim() || undefined;
+}
+
 export const fetchWithConfig = async (url: string) => {
   const headers = new Headers({
     "User-Agent": API_CONFIG.userAgent,

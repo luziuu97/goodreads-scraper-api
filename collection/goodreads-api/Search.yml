@@ -5,11 +5,15 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=love"
+  url: "{{url}}/api/book/search?query=9781728264318"
   params:
     - name: query
-      value: love
+      value: "9781728264318"
       type: query
+    - name: provider
+      value: hardcover
+      type: query
+      disabled: true
   auth: inherit
 
 settings:

@@ -153,3 +153,52 @@ Retrieves a paginated list of books by a specific author.
   }
 }
 ```
+
+## 5. User List
+Retrieves a paginated Goodreads shelf or custom list for a user.
+
+- **Endpoint**: `GET /api/user/:slug/list/:listName`
+- **Query Parameters**:
+  - `page`: Page number (default: 1).
+  - `per_page`: Number of books per page (default: 100, max: 100).
+  - `sort`: Goodreads list sort value.
+  - `order`: Sort direction (`a` or `d`).
+  - `extended`: Set to `true` to embed full book details for every returned list item.
+
+### Response Structure
+```json
+{
+  "success": true,
+  "scrapedURL": "...",
+  "user": {
+    "id": "179234404"
+  },
+  "list": {
+    "name": "read",
+    "sort": "review",
+    "order": "d",
+    "extended": true
+  },
+  "pagination": {
+    "currentPage": 1,
+    "perPage": 10,
+    "totalPages": 4,
+    "hasNextPage": true,
+    "hasPreviousPage": false
+  },
+  "books": [
+    {
+      "reviewId": "1234567890",
+      "bookId": "18144590",
+      "title": "The Alchemist",
+      "bookUrl": "https://www.goodreads.com/book/show/18144590-the-alchemist",
+      "author": "Paulo Coelho",
+      "details": {
+        "slug": "18144590-the-alchemist",
+        "title": "The Alchemist"
+      }
+    }
+  ],
+  "lastScraped": "..."
+}
+```

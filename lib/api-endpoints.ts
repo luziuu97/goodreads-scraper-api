@@ -63,7 +63,7 @@ export const endpoints: Endpoint[] = [
     id: "get-book-details",
     name: "Get Book Details",
     description:
-      "Retrieve detailed information about a specific book by its Goodreads slug.",
+      "Retrieve detailed information about a specific book from Goodreads or Hardcover.",
     method: "GET",
     url: "/api/book/details/:slug",
     route: "/api/book/details",
@@ -74,7 +74,7 @@ export const endpoints: Endpoint[] = [
   {
     id: "search-books",
     name: "Search Books",
-    description: "Search for books by title, author, or ISBN.",
+    description: "Search for books by title, author, or ISBN across Goodreads or Hardcover.",
     method: "GET",
     url: "/api/search",
     route: "/api/search",
