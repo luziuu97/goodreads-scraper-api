@@ -2,6 +2,10 @@ import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
 
 const HARDCOVER_GRAPHQL_URL = "https://api.hardcover.app/v1/graphql";
 
+type HardcoverImage = {
+  url?: string | null;
+} | null;
+
 type HardcoverSearchResult = {
   id?: number | string;
   slug?: string;
@@ -10,9 +14,7 @@ type HardcoverSearchResult = {
   rating?: number;
   release_date?: string;
   genres?: string[];
-  image?: {
-    url?: string;
-  } | null;
+  image?: HardcoverImage;
 };
 
 type HardcoverSearchHit = {
@@ -28,12 +30,15 @@ type HardcoverEditionSearchResult = {
   id?: number;
   isbn_10?: string | null;
   isbn_13?: string | null;
+  asin?: string | null;
   title?: string | null;
   release_date?: string | null;
   rating?: number | null;
   edition_format?: string | null;
-  image?: {
-    url?: string | null;
+  pages?: number | null;
+  image?: HardcoverImage;
+  publisher?: {
+    name?: string | null;
   } | null;
   book?: {
     id?: number | null;
@@ -90,15 +95,26 @@ type HardcoverDetailsBook = {
   image?: Array<{
     url?: string | null;
   }> | null;
-  default_cover_edition?: {
-    pages?: number | null;
-    edition_format?: string | null;
-    isbn_10?: string | null;
-    isbn_13?: string | null;
-    asin?: string | null;
-    publisher?: {
-      name?: string | null;
-    } | null;
+  default_cover_edition?: HardcoverEditionDetails | null;
+};
+
+type HardcoverEditionDetails = {
+  id?: number | null;
+  title?: string | null;
+  release_date?: string | null;
+  rating?: number | null;
+  image?: HardcoverImage;
+  pages?: number | null;
+  edition_format?: string | null;
+  isbn_10?: string | null;
+  isbn_13?: string | null;
+  asin?: string | null;
+  publisher?: {
+    name?: string | null;
+  } | null;
+  book?: {
+    id?: number | null;
+    slug?: string | null;
   } | null;
 };
 
@@ -115,6 +131,20 @@ export type HardcoverNormalizedSearchBook = {
   rating?: number;
   publicationDate?: string;
   genres?: string[];
+  edition?: HardcoverNormalizedEdition;
+};
+
+export type HardcoverNormalizedEdition = {
+  id: number;
+  title?: string;
+  isbn: string | null;
+  isbn10: string | null;
+  asin: string | null;
+  format: string | null;
+  publicationDate: string | null;
+  pages: number | null;
+  publisher: string | null;
+  cover: string;
 };
 
 export type HardcoverNormalizedBookDetails = {
@@ -142,6 +172,7 @@ export type HardcoverNormalizedBookDetails = {
     language: null;
     publishedBy: string | null;
     type: string | null;
+    edition: HardcoverNormalizedEdition | null;
     related: unknown[];
     reviewBreakdown: {
       rating5: string;
@@ -219,7 +250,11 @@ function toStringArray(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function toCoverUrl(image: HardcoverSearchResult["image"] | HardcoverDetailsBook["image"]): string {
+function trimToNull(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function toCoverUrl(image: HardcoverImage | HardcoverDetailsBook["image"]): string {
   if (!image) return "";
   if (Array.isArray(image)) {
     return image.find((entry) => typeof entry?.url === "string" && entry.url)?.url || "";
@@ -298,6 +333,53 @@ function getEditionGenres(
   return genres.length > 0 ? genres : undefined;
 }
 
+function normalizeEdition(
+  edition: HardcoverEditionSearchResult | HardcoverEditionDetails | null | undefined
+): HardcoverNormalizedEdition | undefined {
+  if (typeof edition?.id !== "number") {
+    return undefined;
+  }
+
+  return {
+    id: edition.id,
+    title: trimToNull(edition.title) || undefined,
+    isbn: trimToNull(edition.isbn_13),
+    isbn10: trimToNull(edition.isbn_10),
+    asin: trimToNull(edition.asin),
+    format: trimToNull(edition.edition_format),
+    publicationDate: trimToNull(edition.release_date),
+    pages: typeof edition.pages === "number" ? edition.pages : null,
+    publisher: trimToNull(edition.publisher?.name),
+    cover: toCoverUrl(edition.image || null),
+  };
+}
+
+function editionSelection(includeBook = false): string {
+  return `
+    id
+    title
+    release_date
+    rating
+    pages
+    edition_format
+    isbn_10
+    isbn_13
+    asin
+    image {
+      url
+    }
+    publisher {
+      name
+    }
+    ${includeBook ? `
+    book {
+      id
+      slug
+    }
+    ` : ""}
+  `;
+}
+
 function normalizeIsbnQuery(query: string): string {
   return query.replace(/[^0-9Xx]/g, "").toUpperCase();
 }
@@ -315,16 +397,7 @@ async function searchHardcoverBooksByIsbn(
   const isbnQuery = `
     query SearchBooksByIsbn($isbn: String!, $limit: Int!) {
       editions(where: { ${fieldName}: { _eq: $isbn } }, limit: $limit) {
-        id
-        isbn_10
-        isbn_13
-        title
-        release_date
-        rating
-        edition_format
-        image {
-          url
-        }
+        ${editionSelection()}
         book {
           id
           slug
@@ -392,7 +465,8 @@ async function searchHardcoverBooksByIsbn(
           (typeof linkedBook?.release_date === "string" && linkedBook.release_date.trim()) ||
           (typeof edition.release_date === "string" && edition.release_date.trim()) ||
           undefined,
-        genres: getEditionGenres(linkedBook?.cached_tags),
+        genres: getEditionGenres(linkedBook?.cached_tags ?? null),
+        edition: normalizeEdition(edition),
       };
     })
     .filter((book): book is HardcoverNormalizedSearchBook => Boolean(book));
@@ -490,7 +564,8 @@ export async function searchHardcoverBooks(input: {
 }
 
 export async function fetchHardcoverBookDetails(
-  slugOrId: string
+  slugOrId: string,
+  options: { editionId?: number } = {}
 ): Promise<HardcoverNormalizedBookDetails> {
   const numericId = /^\d+$/.test(slugOrId) ? Number(slugOrId) : null;
   const detailsSelection = `
@@ -532,14 +607,7 @@ export async function fetchHardcoverBookDetails(
       url
     }
     default_cover_edition {
-      pages
-      edition_format
-      isbn_10
-      isbn_13
-      asin
-      publisher {
-        name
-      }
+      ${editionSelection()}
     }
   `;
 
@@ -572,7 +640,36 @@ export async function fetchHardcoverBookDetails(
   const authors = mapHardcoverAuthors(book);
   const series = getSeriesLabel(book);
   const seriesURL = getSeriesUrl(book);
-  const edition = book.default_cover_edition;
+  let edition: HardcoverEditionDetails | null | undefined = book.default_cover_edition;
+
+  if (typeof options.editionId === "number") {
+    const editionData = await hardcoverGraphQLRequest<{ editions?: HardcoverEditionDetails[] }>(
+      `
+        query GetEditionDetailsById($editionId: Int!) {
+          editions(where: { id: { _eq: $editionId } }, limit: 1) {
+            ${editionSelection(true)}
+          }
+        }
+      `,
+      { editionId: options.editionId }
+    );
+    const matchedEdition = Array.isArray(editionData.editions) ? editionData.editions[0] : null;
+    if (!matchedEdition) {
+      throw new Error(`No Hardcover edition found for editionId "${options.editionId}"`);
+    }
+
+    const matchesBook =
+      (typeof matchedEdition.book?.id === "number" && matchedEdition.book.id === book.id) ||
+      (typeof matchedEdition.book?.slug === "string" && matchedEdition.book.slug === book.slug);
+    if (!matchesBook) {
+      throw new Error(
+        `Hardcover editionId "${options.editionId}" does not belong to book "${slugOrId}"`
+      );
+    }
+
+    edition = matchedEdition;
+  }
+
   const rating =
     typeof book.rating === "number" && Number.isFinite(book.rating)
       ? book.rating.toFixed(2)
@@ -581,7 +678,7 @@ export async function fetchHardcoverBookDetails(
   return {
     scrapedURL: `https://hardcover.app/books/${book.slug}`,
     book: {
-      cover: toCoverUrl(book.image),
+      cover: toCoverUrl(edition?.image || null) || toCoverUrl(book.image),
       series,
       seriesURL,
       pages: typeof edition?.pages === "number" ? edition.pages : null,
@@ -596,18 +693,17 @@ export async function fetchHardcoverBookDetails(
       reviewsCount:
         typeof book.reviews_count === "number" ? String(book.reviews_count) : "",
       description: typeof book.description === "string" ? book.description : "",
-      genres: getEditionGenres(book.cached_tags) || [],
-      bookEdition: edition?.edition_format?.trim() || null,
+      genres: getEditionGenres(book.cached_tags ?? null) || [],
+      bookEdition: trimToNull(edition?.edition_format),
       publishDate:
-        typeof book.release_date === "string" && book.release_date.trim()
-          ? book.release_date
-          : null,
-      isbn: edition?.isbn_13?.trim() || null,
-      isbn10: edition?.isbn_10?.trim() || null,
-      asin: edition?.asin?.trim() || null,
+        trimToNull(edition?.release_date) || trimToNull(book.release_date),
+      isbn: trimToNull(edition?.isbn_13),
+      isbn10: trimToNull(edition?.isbn_10),
+      asin: trimToNull(edition?.asin),
       language: null,
-      publishedBy: edition?.publisher?.name?.trim() || null,
-      type: edition?.edition_format?.trim() || null,
+      publishedBy: trimToNull(edition?.publisher?.name),
+      type: trimToNull(edition?.edition_format),
+      edition: normalizeEdition(edition) || null,
       related: [],
       reviewBreakdown: {
         rating5: "",

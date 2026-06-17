@@ -14,7 +14,7 @@ http:
       value: hardcover
       type: query
     - name: bookId
-      value: "240201437"
+      value: "564837"
       type: path
   auth: inherit
 

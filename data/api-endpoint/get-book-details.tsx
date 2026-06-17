@@ -16,6 +16,14 @@ export const getBookDetailsApiParameters = [
     options: ["goodreads", "hardcover"],
   },
   {
+    name: "editionId",
+    type: "number",
+    required: false,
+    description:
+      "Hardcover edition ID from ISBN search results. Use with provider=hardcover to retrieve the exact matched edition.",
+    placeholder: "456",
+  },
+  {
     name: "reviews",
     type: "select",
     required: false,

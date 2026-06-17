@@ -5,13 +5,16 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=9781728264318"
+  url: "{{url}}/api/book/search?query=9789877187182&provider=goodreads"
   params:
     - name: query
-      value: "9781728264318"
+      value: "9789877187182"
       type: query
     - name: provider
-      value: hardcover
+      value: goodreads
+      type: query
+    - name: type
+      value: isbn
       type: query
       disabled: true
   auth: inherit

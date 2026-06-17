@@ -25,6 +25,15 @@ export async function GET(
     const { slug } = await params;
     const includeReviews = req.nextUrl.searchParams.get("reviews") === "true";
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
+    const editionIdParam = req.nextUrl.searchParams.get("editionId");
+    const editionId = editionIdParam ? Number(editionIdParam) : undefined;
+
+    if (
+      editionIdParam &&
+      (!Number.isInteger(editionId) || typeof editionId !== "number" || editionId < 1)
+    ) {
+      throw new Error("Invalid editionId parameter. Must be a positive integer");
+    }
 
     const cacheKey = generateCacheKey(req, "get_book_details", { slug });
     const cachedData = await getCachedResponse(cacheKey);
@@ -43,6 +52,7 @@ export async function GET(
       provider,
       slug,
       includeReviews,
+      editionId,
     });
 
     const apiResponse = NextResponse.json(responseBody);
@@ -59,6 +69,7 @@ export async function GET(
     const message = error instanceof Error ? error.message : "Unknown error";
     const status =
       message.includes("Invalid provider parameter") ||
+      message.includes("Invalid editionId parameter") ||
       message.includes("reviews=true option is only supported")
         ? 400
         : message.includes("HARDCOVER_API_TOKEN")

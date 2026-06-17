@@ -21,6 +21,10 @@ function isBookDetailsUrl(url: string): boolean {
   }
 }
 
+function hasSearchResults(response: NormalizedSearchResponse): boolean {
+  return Array.isArray(response.results.books) && response.results.books.length > 0;
+}
+
 export async function GET(req: NextRequest) {
   try {
     // Apply rate limiting
@@ -185,11 +189,16 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // Cache response in Redis for 4 hours
-    await setCachedResponse(cacheKey, responseData);
-
     const apiResponse = NextResponse.json(responseData);
     apiResponse.headers.set('X-Cache', 'MISS');
+
+    if (hasSearchResults(responseData)) {
+      // Cache only non-empty search results.
+      await setCachedResponse(cacheKey, responseData);
+    } else {
+      apiResponse.headers.set('Cache-Control', 'no-store');
+    }
+
     return apiResponse;
 
   } catch (error) {

@@ -74,6 +74,14 @@ To search Hardcover instead of Goodreads, add `provider=hardcover`:
 fetch(`https://api.goodreads-scraper.com/api/search?query=${encodeURIComponent(searchQuery)}&provider=hardcover&limit=${limit}`)
 ```
 
+When a Hardcover search query is an ISBN, results include the matched `edition`
+object. Pass that `edition.id` to the details endpoint to retrieve the same
+edition instead of Hardcover's default cover edition:
+
+```javascript
+fetch(`https://api.goodreads-scraper.com/api/book/details/${book.id}?provider=hardcover&editionId=${book.edition.id}`)
+```
+
 ### Get Book Lists
 
 ```javascript

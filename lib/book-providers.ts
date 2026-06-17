@@ -17,6 +17,18 @@ export type NormalizedSearchBook = {
   rating?: number;
   publicationDate?: string;
   genres?: string[];
+  edition?: {
+    id: number;
+    title?: string;
+    isbn: string | null;
+    isbn10: string | null;
+    asin: string | null;
+    format: string | null;
+    publicationDate: string | null;
+    pages: number | null;
+    publisher: string | null;
+    cover: string;
+  };
 };
 
 export type NormalizedSearchResponse = {
@@ -46,6 +58,7 @@ function mapHardcoverSearchBook(book: HardcoverNormalizedSearchBook): Normalized
     rating: book.rating,
     publicationDate: book.publicationDate,
     genres: book.genres,
+    edition: book.edition,
   };
 }
 
@@ -107,8 +120,9 @@ export async function getBookDetailsByProvider(input: {
   provider: BookProvider;
   slug: string;
   includeReviews: boolean;
+  editionId?: number;
 }): Promise<NormalizedBookDetailsResponse> {
-  const { provider, slug, includeReviews } = input;
+  const { provider, slug, includeReviews, editionId } = input;
 
   if (provider === "goodreads") {
     const { scrapedURL, book } = await scrapeBookDetails(slug, includeReviews);
@@ -127,7 +141,7 @@ export async function getBookDetailsByProvider(input: {
     throw new Error("The reviews=true option is only supported for provider=goodreads");
   }
 
-  const hardcoverDetails = await fetchHardcoverBookDetails(slug);
+  const hardcoverDetails = await fetchHardcoverBookDetails(slug, { editionId });
   return mapHardcoverBookDetails(hardcoverDetails);
 }
 
