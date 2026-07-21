@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
 import { getBookDetailsByProvider, parseProvider } from "@/lib/book-providers";
-import { generateCacheKey, getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
+import {
+  buildLogicalCacheKey,
+  CACHE_TTL_DETAILS,
+  getCachedResponse,
+  setCachedResponse,
+} from "@/lib/redis-cache";
 
 export const revalidate = 3600;
 
@@ -11,7 +16,6 @@ export async function GET(
 ) {
   try {
     await API_CONFIG.publicRateLimit.check(req, "get_book_details");
-    console.log("Rate limit applied");
   } catch {
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
@@ -23,7 +27,20 @@ export async function GET(
 
   try {
     const { slug } = await params;
-    const includeReviews = req.nextUrl.searchParams.get("reviews") === "true";
+
+    if (req.nextUrl.searchParams.get("reviews") === "true") {
+      const gone = NextResponse.json(
+        {
+          success: false,
+          error:
+            "reviews=true is no longer supported. Goodreads HTML review scraping has been removed.",
+        },
+        { status: 400 }
+      );
+      gone.headers.set("Cache-Control", "no-store");
+      return gone;
+    }
+
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
     const editionIdParam = req.nextUrl.searchParams.get("editionId");
     const editionId = editionIdParam ? Number(editionIdParam) : undefined;
@@ -35,14 +52,18 @@ export async function GET(
       throw new Error("Invalid editionId parameter. Must be a positive integer");
     }
 
-    const cacheKey = generateCacheKey(req, "get_book_details", { slug });
+    const cacheKey = buildLogicalCacheKey("get_book_details", {
+      provider,
+      slug: decodeURIComponent(slug),
+      editionId: editionId ?? "",
+    });
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {
       const cachedResponse = NextResponse.json(cachedData);
       cachedResponse.headers.set(
         "Cache-Control",
-        "public, s-maxage=3600, stale-while-revalidate=86400"
+        "public, s-maxage=86400, stale-while-revalidate=604800"
       );
       cachedResponse.headers.set("X-Cache", "HIT");
       return cachedResponse;
@@ -50,19 +71,18 @@ export async function GET(
 
     const responseBody = await getBookDetailsByProvider({
       provider,
-      slug,
-      includeReviews,
+      slug: decodeURIComponent(slug),
       editionId,
     });
 
     const apiResponse = NextResponse.json(responseBody);
     apiResponse.headers.set(
       "Cache-Control",
-      "public, s-maxage=3600, stale-while-revalidate=86400"
+      "public, s-maxage=86400, stale-while-revalidate=604800"
     );
     apiResponse.headers.set("X-Cache", "MISS");
 
-    await setCachedResponse(cacheKey, responseBody);
+    await setCachedResponse(cacheKey, responseBody, CACHE_TTL_DETAILS);
 
     return apiResponse;
   } catch (error) {
@@ -70,11 +90,16 @@ export async function GET(
     const status =
       message.includes("Invalid provider parameter") ||
       message.includes("Invalid editionId parameter") ||
-      message.includes("reviews=true option is only supported")
+      message.includes("Goodreads HTML provider has been removed")
         ? 400
-        : message.includes("HARDCOVER_API_TOKEN")
+        : message.includes("HARDCOVER_API_TOKEN") ||
+            message.includes("No configured book metadata providers")
           ? 503
-          : 404;
+          : message.includes("No Hardcover book found") ||
+              message.includes("No Hardcover edition found") ||
+              message.includes("does not belong to book")
+            ? 404
+            : 500;
 
     const errorResponse = NextResponse.json(
       {

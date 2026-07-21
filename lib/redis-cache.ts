@@ -3,14 +3,22 @@ import { LRUCache } from 'lru-cache';
 import { NextRequest } from 'next/server';
 import { env } from 'next-runtime-env';
 
-// Cache TTL: 1 week in seconds
-export const CACHE_TTL = 7 * 24 * 60 * 60; // 604800 seconds
+/** Search results TTL: 1 day */
+export const CACHE_TTL_SEARCH = 24 * 60 * 60;
 
-// Initialize Redis client
+/** Book details / enrichment TTL: 14 days */
+export const CACHE_TTL_DETAILS = 14 * 24 * 60 * 60;
+
+/** Cover-related data TTL: 30 days */
+export const CACHE_TTL_COVER = 30 * 24 * 60 * 60;
+
+/** @deprecated Use CACHE_TTL_DETAILS — kept for callers that still pass default */
+export const CACHE_TTL = CACHE_TTL_DETAILS;
+
 let redis: Redis | null = null;
 const memoryCache = new LRUCache<string, string>({
   max: 1000,
-  ttl: CACHE_TTL * 1000,
+  ttl: CACHE_TTL_DETAILS * 1000,
 });
 
 function isRedisDisabled(): boolean {
@@ -23,14 +31,12 @@ function getRedisClient(): Redis | null {
     return null;
   }
 
-  // If Redis is not configured, return null (cache will be disabled)
   const redisUrl = process.env.REDIS_URL || env('REDIS_URL');
   
   if (!redisUrl) {
     return null;
   }
 
-  // Create singleton instance
   if (!redis) {
     try {
       redis = new Redis(redisUrl, {
@@ -45,7 +51,6 @@ function getRedisClient(): Redis | null {
       
       redis.on('error', (err) => {
         console.error('Redis connection error:', err);
-        // Don't throw, just log - allow app to continue without cache
       });
       
       redis.on('connect', () => {
@@ -62,22 +67,58 @@ function getRedisClient(): Redis | null {
 }
 
 /**
- * Generate cache key from request
+ * Normalize cache key fragments so equivalent queries share one entry.
  */
-export function generateCacheKey(req: NextRequest, endpoint: string, params?: Record<string, string>): string {
-  const url = new URL(req.url);
-  const path = url.pathname;
-  const searchParams = url.searchParams.toString();
-  
-  // Include params in cache key if provided
-  const paramsKey = params ? JSON.stringify(params) : '';
-  
-  return `api:${endpoint}:${path}:${searchParams}:${paramsKey}`;
+export function normalizeCachePart(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 /**
- * Get cached response
+ * Generate a logical cache key from sorted, normalized params.
+ * Prefer this over raw URL strings to avoid cache fragmentation.
  */
+export function buildLogicalCacheKey(
+  endpoint: string,
+  parts: Record<string, string | number | null | undefined>
+): string {
+  const sorted = Object.keys(parts)
+    .sort()
+    .filter((key) => {
+      const v = parts[key];
+      return v !== null && v !== undefined && String(v).trim() !== '';
+    })
+    .map((key) => `${key}=${normalizeCachePart(String(parts[key]))}`)
+    .join('&');
+
+  return `api:${endpoint}:v1:${sorted}`;
+}
+
+/**
+ * Generate cache key from request (legacy-compatible helper).
+ * Prefer buildLogicalCacheKey for book routes.
+ */
+export function generateCacheKey(
+  req: NextRequest,
+  endpoint: string,
+  params?: Record<string, string>
+): string {
+  const url = new URL(req.url);
+  const searchParams = Array.from(url.searchParams.entries())
+    .filter(([, value]) => value.trim() !== '')
+    .map(([key, value]) => [key.toLowerCase(), normalizeCachePart(value)] as const)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  const queryKey = searchParams.map(([k, v]) => `${k}=${v}`).join('&');
+  const paramsKey = params
+    ? Object.keys(params)
+        .sort()
+        .map((k) => `${k}=${normalizeCachePart(params[k])}`)
+        .join('&')
+    : '';
+
+  return `api:${endpoint}:v1:${normalizeCachePart(url.pathname)}:${queryKey}:${paramsKey}`;
+}
+
 export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   const memoryCached = memoryCache.get(cacheKey);
   if (memoryCached) {
@@ -90,7 +131,6 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
     return null;
   }
 
-  // Check if Redis is connected before attempting operations
   if (client.status !== 'ready' && client.status !== 'connect') {
     return null;
   }
@@ -102,9 +142,7 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
       return JSON.parse(cached);
     }
   } catch (error) {
-    // Silently fail if Redis is not available - app should continue without cache
-    // Only log if it's not a connection-related error
-    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+    if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
       console.error('Redis get error:', error);
     }
   }
@@ -112,10 +150,11 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   return null;
 }
 
-/**
- * Set cached response
- */
-export async function setCachedResponse(cacheKey: string, data: any, ttl: number = CACHE_TTL): Promise<void> {
+export async function setCachedResponse(
+  cacheKey: string,
+  data: any,
+  ttl: number = CACHE_TTL_DETAILS
+): Promise<void> {
   memoryCache.set(cacheKey, JSON.stringify(data), {
     ttl: ttl * 1000,
   });
@@ -126,7 +165,6 @@ export async function setCachedResponse(cacheKey: string, data: any, ttl: number
     return;
   }
 
-  // Check if Redis is connected before attempting operations
   if (client.status !== 'ready' && client.status !== 'connect') {
     return;
   }
@@ -134,17 +172,12 @@ export async function setCachedResponse(cacheKey: string, data: any, ttl: number
   try {
     await client.setex(cacheKey, ttl, JSON.stringify(data));
   } catch (error) {
-    // Silently fail if Redis is not available - app should continue without cache
-    // Only log if it's not a connection-related error
-    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+    if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
       console.error('Redis set error:', error);
     }
   }
 }
 
-/**
- * Delete cached response
- */
 export async function deleteCachedResponse(cacheKey: string): Promise<void> {
   memoryCache.delete(cacheKey);
 
@@ -154,7 +187,6 @@ export async function deleteCachedResponse(cacheKey: string): Promise<void> {
     return;
   }
 
-  // Check if Redis is connected before attempting operations
   if (client.status !== 'ready' && client.status !== 'connect') {
     return;
   }
@@ -162,17 +194,12 @@ export async function deleteCachedResponse(cacheKey: string): Promise<void> {
   try {
     await client.del(cacheKey);
   } catch (error) {
-    // Silently fail if Redis is not available - app should continue without cache
-    // Only log if it's not a connection-related error
-    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+    if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
       console.error('Redis delete error:', error);
     }
   }
 }
 
-/**
- * Clear all cache for an endpoint
- */
 export async function clearEndpointCache(endpoint: string): Promise<void> {
   for (const key of memoryCache.keys()) {
     if (key.startsWith(`api:${endpoint}:`)) {
@@ -186,7 +213,6 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
     return;
   }
 
-  // Check if Redis is connected before attempting operations
   if (client.status !== 'ready' && client.status !== 'connect') {
     return;
   }
@@ -197,9 +223,7 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
       await client.del(...keys);
     }
   } catch (error) {
-    // Silently fail if Redis is not available - app should continue without cache
-    // Only log if it's not a connection-related error
-    if (error instanceof Error && !error.message.includes('Stream isn\'t writeable')) {
+    if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
       console.error('Redis clear error:', error);
     }
   }

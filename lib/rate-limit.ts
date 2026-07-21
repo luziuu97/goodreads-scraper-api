@@ -4,34 +4,17 @@ import { ApiEndPointID } from './api-endpoints';
 import { env } from 'next-runtime-env';
 
 /**
- * Environment Variables for Rate Limiting Configuration:
- * 
- * RATE_LIMIT_UNIQUE_TOKENS (default: 100)
- * - Maximum number of unique IP + endpoint combinations to track
- * - Each combination of IP address and endpoint counts as one token
- * - Once reached, oldest tokens are removed to make space for new ones
- * 
- * RATE_LIMIT_INTERVAL (default: 86400000 - 24 hours in milliseconds)
- * - Time window for rate limiting in milliseconds
- * - Counters reset after this interval
- * - Default is 24 hours (86400000ms)
- * 
- * RATE_LIMIT_MAX_REQUESTS (default: 100)
- * - Maximum number of requests allowed per IP per endpoint per interval
- * - Separate counter for each endpoint
- * - Resets every RATE_LIMIT_INTERVAL milliseconds
+ * Lightweight abuse control for public book endpoints.
  *
- * IMPORT_RATE_LIMIT_INTERVAL (default: 3600000 - 1 hour in milliseconds)
- * IMPORT_RATE_LIMIT_MAX_REQUESTS (default: 5000)
- * IMPORT_RATE_LIMIT_UNIQUE_TOKENS (default: 50000)
- * - Dedicated profile for import-heavy user endpoints
- * 
- * Example:
- * If IP 1.2.3.4 makes requests to a public endpoint:
- * - Counter starts at 0
- * - Increments with each request
- * - Blocks when reaches RATE_LIMIT_MAX_REQUESTS
- * - Resets after RATE_LIMIT_INTERVAL milliseconds
+ * Goals:
+ * - Allow normal usage of at least ~1 request per second per IP
+ * - Soft-throttle only clear abuse (high burst, suspicious UA spam)
+ * - Do not apply low daily caps that block legitimate clients
+ *
+ * Environment:
+ * - ABUSE_MAX_REQUESTS_PER_SECOND (default: 15)
+ * - ABUSE_MAX_REQUESTS_PER_10S (default: 60)
+ * - ABUSE_STRICT_EMPTY_UA (default: true) — empty UA uses half the burst budget
  */
 
 type Options = {
@@ -44,7 +27,6 @@ function getClientIp(req: NextRequest): string {
   const realIp = req.headers.get("x-real-ip");
   
   if (forwarded) {
-    // Get the first IP if multiple are present
     return forwarded.split(',')[0].trim();
   }
   
@@ -52,74 +34,95 @@ function getClientIp(req: NextRequest): string {
     return realIp;
   }
   
-  // Fallback to a default token if no IP can be determined
   return 'default_ip';
 }
 
-export function rateLimit(options?: Options) {
-  const maxRequests =
-    parseInt(env("RATE_LIMIT_MAX_REQUESTS") || "") ||
-    parseInt(env("RATE_LIMIT_DAILY") || "") ||
-    100;
-  const importMaxRequests =
-    parseInt(env("IMPORT_RATE_LIMIT_MAX_REQUESTS") || "") ||
-    parseInt(env("IMPORT_RATE_LIMIT_DAILY") || "") ||
-    5000;
-  const maxTokens =
-    parseInt(env("RATE_LIMIT_UNIQUE_TOKENS") || "") ||
-    options?.uniqueTokenPerInterval ||
-    100;
-  const importMaxTokens =
-    parseInt(env("IMPORT_RATE_LIMIT_UNIQUE_TOKENS") || "") ||
-    50000;
-  const intervalMs =
-    parseInt(env("RATE_LIMIT_INTERVAL") || "") ||
-    options?.interval ||
-    24 * 60 * 60 * 1000;
-  const importIntervalMs =
-    parseInt(env("IMPORT_RATE_LIMIT_INTERVAL") || "") ||
-    60 * 60 * 1000;
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const n = parseInt(value || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
-  const tokenCache = new LRUCache<string, number[]>({
-    max: maxTokens,
-    ttl: intervalMs,
-  });
-  const importTokenCache = new LRUCache<string, number[]>({
-    max: importMaxTokens,
-    ttl: importIntervalMs,
+function isSuspiciousUserAgent(req: NextRequest): boolean {
+  const ua = (req.headers.get("user-agent") || "").trim();
+  if (!ua) return true;
+  // Extremely short / empty-looking agents
+  if (ua.length < 3) return true;
+  return false;
+}
+
+type WindowState = {
+  secondBucket: number;
+  secondCount: number;
+  tenSecondBucket: number;
+  tenSecondCount: number;
+};
+
+export function rateLimit(_options?: Options) {
+  const maxPerSecond = parsePositiveInt(
+    process.env.ABUSE_MAX_REQUESTS_PER_SECOND || env("ABUSE_MAX_REQUESTS_PER_SECOND"),
+    15
+  );
+  const maxPer10s = parsePositiveInt(
+    process.env.ABUSE_MAX_REQUESTS_PER_10S || env("ABUSE_MAX_REQUESTS_PER_10S"),
+    60
+  );
+  const strictEmptyUa =
+    (process.env.ABUSE_STRICT_EMPTY_UA || env("ABUSE_STRICT_EMPTY_UA") || "true")
+      .toLowerCase() !== "false";
+
+  const windows = new LRUCache<string, WindowState>({
+    max: 50_000,
+    ttl: 60_000,
   });
 
-  function checkLimit(
-    req: NextRequest,
-    endpoint: ApiEndPointID,
-    cache: LRUCache<string, number[]>,
-    requestLimit: number
-  ) {
-    return new Promise<void>((resolve, reject) => {
+  function checkAbuse(req: NextRequest, endpoint: ApiEndPointID): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const now = Date.now();
+      const secondBucket = Math.floor(now / 1000);
+      const tenSecondBucket = Math.floor(now / 10_000);
       const clientIp = getClientIp(req);
       const token = `${endpoint}_${clientIp}`;
-      const tokenCount = (cache.get(token) as number[]) || [0];
 
-      if (tokenCount[0] === 0) {
-        cache.set(token, [1]);
-        resolve();
-      } else {
-        const currentUsage = tokenCount[0];
-        const isRateLimited = currentUsage >= requestLimit;
-        if (isRateLimited) {
-          reject();
-        } else {
-          cache.set(token, [currentUsage + 1]);
-          resolve();
-        }
+      let state = windows.get(token);
+      if (!state) {
+        state = {
+          secondBucket,
+          secondCount: 0,
+          tenSecondBucket,
+          tenSecondCount: 0,
+        };
       }
+
+      if (state.secondBucket !== secondBucket) {
+        state.secondBucket = secondBucket;
+        state.secondCount = 0;
+      }
+      if (state.tenSecondBucket !== tenSecondBucket) {
+        state.tenSecondBucket = tenSecondBucket;
+        state.tenSecondCount = 0;
+      }
+
+      state.secondCount += 1;
+      state.tenSecondCount += 1;
+      windows.set(token, state);
+
+      const suspicious = strictEmptyUa && isSuspiciousUserAgent(req);
+      const secondLimit = suspicious ? Math.max(3, Math.floor(maxPerSecond / 2)) : maxPerSecond;
+      const tenSecondLimit = suspicious ? Math.max(10, Math.floor(maxPer10s / 2)) : maxPer10s;
+
+      if (state.secondCount > secondLimit || state.tenSecondCount > tenSecondLimit) {
+        reject();
+        return;
+      }
+
+      resolve();
     });
   }
 
   return {
-    check: (req: NextRequest, endpoint: ApiEndPointID) =>
-      checkLimit(req, endpoint, tokenCache, maxRequests),
-    checkImport: (req: NextRequest, endpoint: ApiEndPointID) =>
-      checkLimit(req, endpoint, importTokenCache, importMaxRequests),
+    /** Soft abuse check for public book endpoints */
+    check: (req: NextRequest, endpoint: ApiEndPointID) => checkAbuse(req, endpoint),
+    /** Alias kept for call sites that previously used import limits */
+    checkImport: (req: NextRequest, endpoint: ApiEndPointID) => checkAbuse(req, endpoint),
   };
 }

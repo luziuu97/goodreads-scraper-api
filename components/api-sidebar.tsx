@@ -7,12 +7,7 @@ import { Badge } from "@/components/ui/badge"
 
 import {
   BookOpen,
-  User,
   Search,
-  BookmarkIcon,
-  ListFilter,
-  MessageSquare,
-  Quote,
   Info,
   GitBranch,
   AlertTriangle,
@@ -58,20 +53,10 @@ export function ApiSidebar({
 
   const getIcon = (id: string) => {
     switch (id) {
-      case "get-book-lists":
-        return <ListFilter className="h-5 w-5" />;
       case "get-book-details":
         return <BookOpen className="h-5 w-5" />;
-      case "get-author-details":
-        return <User className="h-5 w-5" />;
       case "search-books":
         return <Search className="h-5 w-5" />;
-      case "get-user-shelves":
-        return <BookmarkIcon className="h-5 w-5" />;
-      case "get-book-reviews":
-        return <MessageSquare className="h-5 w-5" />;
-      case "get-book-quotes":
-        return <Quote className="h-5 w-5" />;
       case "about":
         return <Info className="h-5 w-5" />;
       case "changelog":
@@ -117,195 +102,47 @@ export function ApiSidebar({
 
             {isEndpointsOpen && (
               <div className="space-y-3">
-                {/* Books Category */}
                 <div>
                   <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-3 mb-1 uppercase">
                     Books
                   </div>
                   <nav className="space-y-1">
-                    {endpoints
-                      .filter((endpoint) =>
-                        ["get-book-lists", "get-book-details", "get-book-reviews", "get-book-quotes"].includes(
-                          endpoint.id,
-                        ),
-                      )
-                      .map((endpoint) => (
-                        <button
-                          key={endpoint.id}
-                          onClick={() => setActiveEndpoint(endpoint.id)}
+                    {endpoints.map((endpoint) => (
+                      <button
+                        key={endpoint.id}
+                        onClick={() => setActiveEndpoint(endpoint.id)}
+                        className={cn(
+                          "flex items-center w-full px-3 py-2 text-sm rounded-md transition-colors",
+                          activeEndpoint === endpoint.id
+                            ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-medium"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white",
+                        )}
+                      >
+                        <span
                           className={cn(
-                            "flex items-center w-full px-3 py-2 text-sm rounded-md transition-colors",
+                            "mr-2",
                             activeEndpoint === endpoint.id
-                              ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-medium"
-                              : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white",
+                              ? "text-emerald-500 dark:text-emerald-400"
+                              : "text-slate-500 dark:text-slate-400",
                           )}
                         >
+                          {getIcon(endpoint.id)}
+                        </span>
+                        {endpoint.name}
+                        {endpoint.method && (
                           <span
                             className={cn(
-                              "mr-2",
-                              activeEndpoint === endpoint.id
-                                ? "text-emerald-500 dark:text-emerald-400"
-                                : "text-slate-500 dark:text-slate-400",
+                              "ml-auto text-xs px-1.5 py-0.5 rounded-full",
+                              endpoint.method === "GET"
+                                ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
+                                : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
                             )}
                           >
-                            {getIcon(endpoint.id)}
+                            {endpoint.method}
                           </span>
-                          {endpoint.name}
-                          {endpoint.method && (
-                            <span
-                              className={cn(
-                                "ml-auto text-xs px-1.5 py-0.5 rounded-full",
-                                endpoint.method === "GET"
-                                  ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
-                                  : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
-                              )}
-                            >
-                              {endpoint.method}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                  </nav>
-                </div>
-
-                {/* Authors Category */}
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-3 mb-1 uppercase">
-                    Authors
-                  </div>
-                  <nav className="space-y-1">
-                    {endpoints
-                      .filter((endpoint) => ["get-author-details"].includes(endpoint.id))
-                      .map((endpoint) => (
-                        <button
-                          key={endpoint.id}
-                          onClick={() => setActiveEndpoint(endpoint.id)}
-                          className={cn(
-                            "flex items-center w-full px-3 py-2 text-sm rounded-md transition-colors",
-                            activeEndpoint === endpoint.id
-                              ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-medium"
-                              : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "mr-2",
-                              activeEndpoint === endpoint.id
-                                ? "text-emerald-500 dark:text-emerald-400"
-                                : "text-slate-500 dark:text-slate-400",
-                            )}
-                          >
-                            {getIcon(endpoint.id)}
-                          </span>
-                          {endpoint.name}
-                          {endpoint.method && (
-                            <span
-                              className={cn(
-                                "ml-auto text-xs px-1.5 py-0.5 rounded-full",
-                                endpoint.method === "GET"
-                                  ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
-                                  : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
-                              )}
-                            >
-                              {endpoint.method}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                  </nav>
-                </div>
-
-                {/* Users Category */}
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-3 mb-1 uppercase">
-                    Users
-                  </div>
-                  <nav className="space-y-1">
-                    {endpoints
-                      .filter((endpoint) => ["get-user-shelves"].includes(endpoint.id))
-                      .map((endpoint) => (
-                        <button
-                          key={endpoint.id}
-                          onClick={() => setActiveEndpoint(endpoint.id)}
-                          className={cn(
-                            "flex items-center w-full px-3 py-2 text-sm rounded-md transition-colors",
-                            activeEndpoint === endpoint.id
-                              ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-medium"
-                              : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "mr-2",
-                              activeEndpoint === endpoint.id
-                                ? "text-emerald-500 dark:text-emerald-400"
-                                : "text-slate-500 dark:text-slate-400",
-                            )}
-                          >
-                            {getIcon(endpoint.id)}
-                          </span>
-                          {endpoint.name}
-                          {endpoint.method && (
-                            <span
-                              className={cn(
-                                "ml-auto text-xs px-1.5 py-0.5 rounded-full",
-                                endpoint.method === "GET"
-                                  ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
-                                  : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
-                              )}
-                            >
-                              {endpoint.method}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                  </nav>
-                </div>
-
-                {/* Search Category */}
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-3 mb-1 uppercase">
-                    Search
-                  </div>
-                  <nav className="space-y-1">
-                    {endpoints
-                      .filter((endpoint) => ["search-books"].includes(endpoint.id))
-                      .map((endpoint) => (
-                        <button
-                          key={endpoint.id}
-                          onClick={() => setActiveEndpoint(endpoint.id)}
-                          className={cn(
-                            "flex items-center w-full px-3 py-2 text-sm rounded-md transition-colors",
-                            activeEndpoint === endpoint.id
-                              ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-medium"
-                              : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "mr-2",
-                              activeEndpoint === endpoint.id
-                                ? "text-emerald-500 dark:text-emerald-400"
-                                : "text-slate-500 dark:text-slate-400",
-                            )}
-                          >
-                            {getIcon(endpoint.id)}
-                          </span>
-                          {endpoint.name}
-                          {endpoint.method && (
-                            <span
-                              className={cn(
-                                "ml-auto text-xs px-1.5 py-0.5 rounded-full",
-                                endpoint.method === "GET"
-                                  ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
-                                  : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
-                              )}
-                            >
-                              {endpoint.method}
-                            </span>
-                          )}
-                        </button>
-                      ))}
+                        )}
+                      </button>
+                    ))}
                   </nav>
                 </div>
               </div>

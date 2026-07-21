@@ -5,16 +5,21 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=9789877187182&provider=goodreads"
+  url: "{{url}}/api/book/search?query=fourth+wing"
   params:
     - name: query
-      value: "9789877187182"
+      value: fourth wing
       type: query
     - name: provider
-      value: goodreads
+      value: hardcover
       type: query
+      disabled: true
     - name: type
       value: isbn
+      type: query
+      disabled: true
+    - name: limit
+      value: "10"
       type: query
       disabled: true
   auth: inherit

@@ -102,11 +102,12 @@ export function ApiContent({ endpoint }: ApiContentProps) {
         }
 
         const queryParams = new URLSearchParams();
-        if (params.reviews) queryParams.set("reviews", params.reviews);
+        if (params.provider) queryParams.set("provider", params.provider);
+        if (params.editionId) queryParams.set("editionId", params.editionId);
         const queryString = queryParams.toString();
         const requestUrl = queryString
-          ? `/api/book/details/${slug}?${queryString}`
-          : `/api/book/details/${slug}`;
+          ? `/api/book/details/${encodeURIComponent(slug)}?${queryString}`
+          : `/api/book/details/${encodeURIComponent(slug)}`;
 
         const startTime = performance.now();
         const response = await fetch(requestUrl);
@@ -115,45 +116,33 @@ export function ApiContent({ endpoint }: ApiContentProps) {
 
         const data = await response.json();
         setResponse(JSON.stringify(data, null, 2));
-      } else if (endpoint.id === "get-author-details") {
-        const slug = params.slug;
-        if (!slug) {
-          throw new Error("Slug is required");
-        }
-
-        const startTime = performance.now();
-        const response = await fetch(`/api/author/details/${slug}`);
-        const endTime = performance.now();
-        setRequestTime(endTime - startTime);
-
-        const data = await response.json();
-        setResponse(JSON.stringify(data, null, 2));
-      } else if (endpoint.id === "get-author-books") {
-        const slug = params.slug;
-        if (!slug) {
-          throw new Error("Slug is required");
+      } else if (endpoint.id === "search-books") {
+        const query = params.query;
+        if (!query) {
+          throw new Error("Query is required");
         }
 
         const queryParams = new URLSearchParams();
-        if (params.sort) queryParams.set("sort", params.sort);
-        if (params.page) queryParams.set("page", params.page);
+        queryParams.set("query", query);
+        if (params.type) queryParams.set("type", params.type);
+        if (params.provider) queryParams.set("provider", params.provider);
         if (params.limit) queryParams.set("limit", params.limit);
 
         const startTime = performance.now();
-        const response = await fetch(
-          `/api/author/books/${slug}?${queryParams.toString()}`
-        );
+        const response = await fetch(`/api/book/search?${queryParams.toString()}`);
         const endTime = performance.now();
         setRequestTime(endTime - startTime);
 
         const data = await response.json();
         setResponse(JSON.stringify(data, null, 2));
+      } else {
+        throw new Error("This endpoint is not available in the interactive playground");
       }
     } catch (error) {
       setResponse(
         JSON.stringify(
           {
-            error: "Failed to fetch author details",
+            error: "Failed to fetch",
             message: error instanceof Error ? error.message : "Unknown error",
           },
           null,

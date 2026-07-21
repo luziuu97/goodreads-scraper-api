@@ -15,7 +15,7 @@ export const metadata: Metadata = {
       url: "https://github.com/ekamid",
     },
   ],
-  keywords: ["goodreads", "api", "books", "scraper", "reading", "library"],
+  keywords: ["books", "api", "metadata", "hardcover", "reading", "library"],
   creator: "Ebrahim Khalil",
 };
 

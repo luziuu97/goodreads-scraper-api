@@ -1,14 +1,10 @@
-# Goodreads Scraper API
+# Goodreads Scraper API (Book Metadata)
 
 ![API Status](https://img.shields.io/badge/status-operational-brightgreen)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A modern, RESTful API for accessing Goodreads data. Created as an alternative to the deprecated official Goodreads API.
-
-## 📚 Overview
-
-The Goodreads Scraper API provides developers with access to book data from Goodreads, including book details, author information, reviews, quotes, and more. This API is designed to be easy to use and integrate into your applications.
+A modern REST API for **structured book metadata**. Goodreads HTML scraping has been removed from the book search/details path. Data is served through a **provider registry**; today the only registered provider is **Hardcover**, with an **aggregate** default that queries all registered providers.
 
 ### Base URL
 
@@ -16,199 +12,159 @@ The Goodreads Scraper API provides developers with access to book data from Good
 https://gdscraper.bookishnearby.com
 ```
 
-## 📋 Available Endpoints
+## Available Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/lists` | GET | Get book lists by category, genre, or popularity |
-| `/api/book/details/:slug` | GET | Get detailed information about a specific book |
-| `/api/author/details/:slug` | GET | Get detailed information about an author |
-| `/api/search` | GET | Search for books by title, author, or ISBN |
-| `/api/users/:username/shelves` | GET | Get a user's bookshelves and their books |
-| `/api/book/details/:slug/reviews` | GET | Get reviews for a specific book |
-| `/api/quotes` | GET | Get quotes from a book or by an author |
+| `/api/book/search` | GET | Search books by title, author, or ISBN |
+| `/api/book/details/:slug` | GET | Get detailed book metadata by provider id/slug |
 
-## 🚀 Quick Start Examples
+Author, user, reviews, lists, and quotes endpoints that depended on Goodreads HTML scraping have been **removed**.
 
-### Get Book Details
+## Providers
 
-```javascript
-// Using fetch
-fetch('https://api.goodreads-scraper.com/api/books/58490567', {
-  headers: {
-    'X-API-Key': 'your_api_key_here'
-  }
-})
-.then(response => response.json())
-.then(data => {
-  console.log(data);
-  // Process the book details
-})
-.catch(error => console.error('Error fetching book details:', error));
-```
+| Provider | Status | Notes |
+|----------|--------|--------|
+| `aggregate` (default) | Active | Runs all registered structured providers and merges results. Currently = Hardcover. |
+| `hardcover` | Active | Hardcover GraphQL API. Requires `HARDCOVER_API_TOKEN`. |
+| `goodreads` | Removed | Returns **400** with a deprecation message. |
+| Open Library / Google Books / OpenAI | Not registered | Folder structure supports adding them later under `lib/providers/`. |
 
-### Search for Books
+When **no** `provider` query param is passed, the API uses **aggregate**. When `provider=hardcover` is set, only Hardcover is used.
+
+## Quick Start
+
+### Search for books (aggregate default)
 
 ```javascript
-// Using fetch
-const searchQuery = 'fourth wing';
-const searchType = 'all';
-const limit = 20;
+const searchQuery = "fourth wing";
 
-fetch(`https://api.goodreads-scraper.com/api/search?query=${encodeURIComponent(searchQuery)}&type=${searchType}&limit=${limit}`, {
-  headers: {
-    'X-API-Key': 'your_api_key_here'
-  }
-})
-.then(response => response.json())
-.then(data => {
-  console.log(data);
-  // Process the search results
-})
-.catch(error => console.error('Error searching books:', error));
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/search?query=${encodeURIComponent(searchQuery)}&limit=20`
+)
+  .then((response) => response.json())
+  .then((data) => console.log(data));
 ```
 
-To search Hardcover instead of Goodreads, add `provider=hardcover`:
+### Search with explicit Hardcover
 
 ```javascript
-fetch(`https://api.goodreads-scraper.com/api/search?query=${encodeURIComponent(searchQuery)}&provider=hardcover&limit=${limit}`)
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/search?query=${encodeURIComponent(searchQuery)}&provider=hardcover&limit=20`
+);
 ```
 
-When a Hardcover search query is an ISBN, results include the matched `edition`
-object. Pass that `edition.id` to the details endpoint to retrieve the same
-edition instead of Hardcover's default cover edition:
+When a Hardcover search query is an ISBN, results may include a matched `edition` object. Pass `edition.id` to details:
 
 ```javascript
-fetch(`https://api.goodreads-scraper.com/api/book/details/${book.id}?provider=hardcover&editionId=${book.edition.id}`)
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/details/${book.id}?provider=hardcover&editionId=${book.edition.id}`
+);
 ```
 
-### Get Book Lists
+### Get book details
 
 ```javascript
-// Using fetch
-fetch('https://api.goodreads-scraper.com/api/lists?type=bestsellers&limit=10', {
-  headers: {
-    'X-API-Key': 'your_api_key_here'
-  }
-})
-.then(response => response.json())
-.then(data => {
-  console.log(data);
-  // Process the book list data
-})
-.catch(error => console.error('Error fetching book lists:', error));
+fetch(`https://gdscraper.bookishnearby.com/api/book/details/${encodeURIComponent(bookIdOrSlug)}`)
+  .then((response) => response.json())
+  .then((data) => console.log(data));
 ```
 
-## 📘 Documentation
-
-For complete documentation, visit our [API Documentation](https://api.goodreads-scraper.com/docs).
-
-## 📊 Rate Limits
-
-This API is completely free to use with the following limitations:
-- Public endpoints default to 60 requests per hour per endpoint
-- Goodreads user import endpoints default to 5000 requests per hour per endpoint
-- Rate limits are tracked per IP address
-- Each endpoint has its own independent counter
-- Configure public limits with `RATE_LIMIT_INTERVAL`, `RATE_LIMIT_MAX_REQUESTS`, and `RATE_LIMIT_UNIQUE_TOKENS`
-- Configure import limits with `IMPORT_RATE_LIMIT_INTERVAL`, `IMPORT_RATE_LIMIT_MAX_REQUESTS`, and `IMPORT_RATE_LIMIT_UNIQUE_TOKENS`
-
-### 🚀 Need Unlimited Access?
-
-Want unlimited requests? You can:
-1. Clone this repository
-2. Self-host the API on your own server
-3. Modify rate limits as needed
-
-```bash
-# Clone the repository
-git clone https://github.com/ekamid/goodreads-scraper-api.git
-
-# Install dependencies
-cd goodreads-scraper-api
-npm install
-
-# Start the development server
-npm run dev
-
-```
-
-### Optional environment variables
-
-- `GOODREADS_SESSION_COOKIE`: improves Goodreads scraping reliability for pages that challenge anonymous traffic
-- `HARDCOVER_API_TOKEN`: required for `provider=hardcover` requests
-- `REDIS_URL`: enables shared response caching
-- `DISABLE_REDIS=true`: disables Redis usage even if `REDIS_URL` is set
-
-## 🔄 Response Format
-
-All API responses are returned in JSON format with the following structure:
+## Response shape (search)
 
 ```json
 {
   "success": true,
-  "data": { ... },
-  "error": null
-}
-```
-
-In case of an error:
-
-```json
-{
-  "success": false,
-  "data": null,
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "Error message description"
+  "provider": "aggregate",
+  "results": {
+    "query": "fourth wing",
+    "totalResults": 1,
+    "books": [
+      {
+        "id": "1662524",
+        "provider": "hardcover",
+        "title": "Fourth Wing",
+        "author": "Rebecca Yarros",
+        "cover": "https://...",
+        "rating": 4.58,
+        "publicationDate": "2023-05-02",
+        "genres": ["Fantasy"]
+      }
+    ]
   }
 }
 ```
 
-## 👥 Who Made This?
+## Rate limits / abuse control
 
-The Goodreads Scraper API was built during a caffeine-fueled coding sprint as part of the R&D project [Nearby Bookish](https://bookishnearby.com); a platform that connects local readers to share books, engage in discussions, and foster a sense of community around reading.  
-Since Goodreads shut down their API, one overwhelmed developer (hi 👋) decided to make a new way to fetch book data — by scraping it.
+This API is free to use. Public book endpoints use **lightweight abuse controls**, not a strict low daily quota:
 
-**Developer**: [Ebrahim Khalil](https://github.com/ekamid) (professional overthinker and sometimes pretends to be a book nerd)
+- Normal usage of at least **~1 request per second** per IP is allowed
+- Soft **429** only for clear burst abuse or suspicious automated traffic
+- Configure with `ABUSE_MAX_REQUESTS_PER_SECOND` (default 15) and `ABUSE_MAX_REQUESTS_PER_10S` (default 60)
+- Empty / missing user-agents may use a stricter burst budget
 
-## 👥 Who Made This?
+### Self-hosting
 
-The Goodreads Scraper API was built during a caffeine-fueled coding sprint as part of the R&D project [Nearby Bookish](https://bookishnearby.com); a platform that connects local readers to share books, engage in discussions, and foster a sense of community around reading.  
-Since Goodreads shut down their API, one overwhelmed developer (hi 👋) decided to make a new way to fetch book data — by scraping it.
+```bash
+git clone https://github.com/ekamid/goodreads-scraper-api.git
+cd goodreads-scraper-api
+npm install
+npm run dev
+```
 
-**Developer**: [Ebrahim Khalil](https://github.com/ekamid) (professional overthinker and sometimes pretends to be a book nerd)
+### Environment variables
 
-## Why We Made This?
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HARDCOVER_API_TOKEN` | Yes (for live data) | Hardcover GraphQL API token |
+| `REDIS_URL` | No | Enables shared Redis response caching |
+| `DISABLE_REDIS` | No | Set `true` to disable Redis even if `REDIS_URL` is set |
+| `ABUSE_MAX_REQUESTS_PER_SECOND` | No | Burst ceiling per IP (default 15) |
+| `ABUSE_MAX_REQUESTS_PER_10S` | No | Sliding 10s ceiling per IP (default 60) |
+| `ABUSE_STRICT_EMPTY_UA` | No | Stricter limits for empty UA (default true) |
+| `NEXT_PUBLIC_BASE_URL` | No | Docs / playground base URL |
 
-When Goodreads deprecated their public API in 2020, many book-related applications and services were left without a reliable source of book data. Although [Nearby Bookish](https://bookishnearby.com)didn't exist back then, while building it, we recognized the gap and the ongoing need for reliable book information. This API was created to fill that gap and to provide developers with easy access to the rich book data still available on Goodreads.
+## Redis cache
 
-**Why another scraper?** Because most existing ones are either outdated, fragile after Goodreads' redesign, or only cover basic data. We built ours to be more reliable, more complete, and easier for developers to integrate and scale with.
+Successful provider responses are cached aggressively:
 
+| Data | Cached? | TTL |
+|------|---------|-----|
+| Search with ≥1 result | Yes | ~1 day |
+| Empty search | No | — |
+| Successful book details | Yes | ~14 days |
+| Errors / 4xx / 5xx | No | — |
 
-## 🙏 Credits
+Cache keys are normalized (sorted params, lowercased query/provider) so equivalent requests share one entry. Set `DISABLE_REDIS=true` to turn caching off at runtime.
 
-Special thanks to the open-source community for providing invaluable tools and libraries. We're particularly grateful to [Biblioreads](https://biblioreads.eu.org) for their pioneering work in making book data accessible. Their project has been a significant inspiration for this API.
+## Provider architecture
 
+```
+lib/providers/
+  types.ts           # BookDataProvider interface
+  registry.ts        # ACTIVE_PROVIDERS list
+  aggregate.ts       # multi-source merge
+  parse-provider.ts  # public provider query parsing
+  hardcover/         # sole registered provider today
+```
 
-## 📝 License
+To add a provider later: implement `BookDataProvider` under `lib/providers/<name>/` and register it in `registry.ts`. Routes do not need to change.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Documentation
 
-## 🤝 Contributing
+For interactive docs, visit `/docs` on a running instance.
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for more information.
+## About
 
-## 📞 Support
+Originally built as an alternative after Goodreads deprecated their official API. Book metadata now comes from structured providers (Hardcover) instead of HTML scraping.
 
-If you need help or have any questions, please [create an issue](https://github.com/ekamid/goodreads-scraper-api/issues/new) or contact us at [ebrahimkha@gmail.com](mailto:ebrahimkha71@gmail.com).
+This project was built as part of [Nearby Bookish](https://bookishnearby.com).
 
-If you find this project helpful, consider buying me a coffee:
+## License
 
-<a href="https://www.buymeacoffee.com/ebrahimkhalil" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50">
-</a>
+MIT
 
-## ⚠️ Disclaimer
+## Disclaimer
 
-This API is not affiliated with or endorsed by Goodreads or Amazon. It is an independent project that scrapes publicly available data from Goodreads. Please use responsibly and in accordance with Goodreads' terms of service.
+This API is not affiliated with Goodreads, Amazon, or Hardcover. Use third-party data sources in accordance with their terms of service.

@@ -1,204 +1,132 @@
 # API Endpoints
 
-The Goodreads Scraper API provides the following endpoints to retrieve data from Goodreads.
+Structured book metadata API. Goodreads HTML scraping has been removed from book routes. Default mode is **aggregate** (all registered providers; currently **Hardcover** only).
 
 ## Base URL
+
 All endpoints are prefixed with `/api`.
 
-## 1. User Details
-Retrieves detailed profile information for a Goodreads user.
+---
 
-- **Endpoint**: `GET /api/user/details/:slug`
-- **Parameters**:
-  - `slug`: The user ID and name slug (e.g., `84291607-water-proof`).
+## 1. Search Books
 
-### Response Structure
-```json
-{
-  "success": true,
-  "scrapedURL": "https://www.goodreads.com/user/show/...",
-  "user": {
-    "profileImage": "...",
-    "name": "...",
-    "username": "...",
-    "location": "...",
-    "website": "...",
-    "joinDate": "...",
-    "lastActive": "...",
-    "birthday": "...",
-    "bio": "...",
-    "stats": {
-        "booksRead": "...",
-        "booksToRead": "...",
-        "currentlyReading": "...",
-        "avgRating": "...",
-        "totalRatings": "...",
-        "totalReviews": "...",
-        "friendsCount": "...",
-        "groupsCount": "..."
-    },
-    "currentlyReadingBooks": [
-      {
-        "title": "...",
-        "author": "...",
-        "cover": "...",
-        "shelves": ["..."],
-        "readingDate": "...",
-        "bookUrl": "...",
-        "authorUrl": "..."
-      }
-    ],
-    "favoriteAuthors": [...],
-    "favoriteBooks": [...],
-    "recentActivity": [...],
-    "shelves": [...],
-    "readingChallenge": {
-        "readCount": 0,
-        "targetCount": 0,
-        "percentage": "0%",
-        "progressText": "...",
-        "url": "..."
-    },
-    "lastScraped": "..."
-  }
-}
+Search for books by title, author, or ISBN.
+
+- **Endpoint**: `GET /api/book/search`
+- **Query parameters**:
+  - `query` (required): Search string
+  - `type` (optional): `all` (default) \| `title` \| `author` \| `isbn`
+  - `limit` (optional): 1–50 (default 10)
+  - `provider` (optional):
+    - omit or `aggregate` — multi-source default (registered providers only)
+    - `hardcover` — Hardcover only
+    - `goodreads` — **400** (removed)
+
+### Example
+
+```
+GET /api/book/search?query=fourth+wing
+GET /api/book/search?query=9781649374042&provider=hardcover&type=isbn
 ```
 
-## 2. Book Details
-Retrieves detailed information about a specific book.
+### Response
 
-- **Endpoint**: `GET /api/book/details/:slug`
-- **Parameters**:
-  - `slug`: The book ID and title slug (e.g., `12345.Some_Book`).
-  - `reviews` (optional): Set to `true` to include scraped reviews. Omitted by default.
-
-### Response Structure
 ```json
 {
   "success": true,
-  "scrapedURL": "...",
-  "book": {
-    "title": "...",
-    "cover": "...",
-    "author": "...",
-    "rating": "...",
-    "ratingCount": "...",
-    "reviewsCount": "...",
-    "description": "...",
-    "genres": [...],
-    "publishDate": "...",
-    "reviewBreakdown": { "rating5": "...", ... },
-    "quotes": "...",
-    "questions": "..."
-  }
-}
-```
-
-When `reviews=true` is sent, the response also includes `book.reviews`.
-
-## 3. Author Details
-Retrieves profile information for an author.
-
-- **Endpoint**: `GET /api/author/details/:slug`
-- **Parameters**:
-  - `slug`: The author ID and name slug.
-
-### Response Structure
-```json
-{
-  "success": true,
-  "scrapedURL": "...",
-  "author": {
-    "name": "...",
-    "image": "...",
-    "birthDate": "...",
-    "deathDate": "...",
-    "description": "...",
-    "genres": [...],
-    "influences": [...],
-    "books": [ ... ], // Top books
-    "series": [ ... ]
-  }
-}
-```
-
-## 4. Author Books
-Retrieves a paginated list of books by a specific author.
-
-- **Endpoint**: `GET /api/author/books/:slug`
-- **Parameters**:
-  - `slug`: The author ID and name slug.
-- **Query Parameters**:
-  - `page`: Page number (default: 1).
-  - `limit`: Number of results per page (default: 10, max: 50).
-  - `sort`: Sort order (`popularity`, `title`, `average_rating`. Default: `popularity`).
-
-### Response Structure
-```json
-{
-  "success": true,
-  "scrapedURL": "...",
-  "pagination": {
-      "currentPage": 1,
-      "limit": 10,
-      "sort": "popularity",
-      "hasNextPage": true,
-      "hasPreviousPage": false
-  },
-  "books": {
-    "title": "...",
+  "provider": "aggregate",
+  "results": {
+    "query": "fourth wing",
+    "totalResults": 1,
     "books": [
-       { "id": 1, "title": "...", "cover": "...", "rating": "...", "bookURL": "..." }
+      {
+        "id": "1662524",
+        "provider": "hardcover",
+        "title": "Fourth Wing",
+        "author": "Rebecca Yarros",
+        "cover": "https://...",
+        "rating": 4.58,
+        "publicationDate": "2023-05-02",
+        "genres": ["Fantasy"]
+      }
     ]
   }
 }
 ```
 
-## 5. User List
-Retrieves a paginated Goodreads shelf or custom list for a user.
+Empty search results are not cached. Successful non-empty results are cached for about **1 day**.
 
-- **Endpoint**: `GET /api/user/:slug/list/:listName`
-- **Query Parameters**:
-  - `page`: Page number (default: 1).
-  - `per_page`: Number of books per page (default: 100, max: 100).
-  - `sort`: Goodreads list sort value.
-  - `order`: Sort direction (`a` or `d`).
-  - `extended`: Set to `true` to embed full book details for every returned list item.
+---
 
-### Response Structure
+## 2. Book Details
+
+Retrieve detailed metadata for a book by provider id or slug.
+
+- **Endpoint**: `GET /api/book/details/:slug`
+- **Path**:
+  - `slug`: Hardcover numeric id or slug
+- **Query parameters**:
+  - `provider` (optional): `aggregate` (default) \| `hardcover`
+  - `editionId` (optional): positive integer Hardcover edition id (from ISBN search)
+  - `reviews=true` is **no longer supported** (returns **400**)
+
+### Example
+
+```
+GET /api/book/details/1662524
+GET /api/book/details/the-alchemist?provider=hardcover
+GET /api/book/details/1662524?provider=hardcover&editionId=32963227
+```
+
+### Response
+
 ```json
 {
   "success": true,
-  "scrapedURL": "...",
-  "user": {
-    "id": "179234404"
-  },
-  "list": {
-    "name": "read",
-    "sort": "review",
-    "order": "d",
-    "extended": true
-  },
-  "pagination": {
-    "currentPage": 1,
-    "perPage": 10,
-    "totalPages": 4,
-    "hasNextPage": true,
-    "hasPreviousPage": false
-  },
-  "books": [
-    {
-      "reviewId": "1234567890",
-      "bookId": "18144590",
-      "title": "The Alchemist",
-      "bookUrl": "https://www.goodreads.com/book/show/18144590-the-alchemist",
-      "author": "Paulo Coelho",
-      "details": {
-        "slug": "18144590-the-alchemist",
-        "title": "The Alchemist"
-      }
-    }
-  ],
-  "lastScraped": "..."
+  "provider": "aggregate",
+  "scrapedURL": "https://hardcover.app/books/...",
+  "book": {
+    "provider": "hardcover",
+    "title": "...",
+    "cover": "...",
+    "author": [{ "id": 1, "name": "...", "url": "..." }],
+    "rating": "4.50",
+    "publishDate": "...",
+    "genres": ["..."],
+    "isbn": "...",
+    "isbn10": "..."
+  }
 }
 ```
+
+Successful details responses are cached for about **14 days**.
+
+---
+
+## Removed endpoints
+
+The following Goodreads HTML-backed endpoints have been **removed** (HTTP 404):
+
+- `/api/author/*`
+- `/api/user/*`
+- Book lists, quotes, and review scrape endpoints
+
+Use structured book search/details instead.
+
+---
+
+## Errors
+
+| Status | Meaning |
+|--------|---------|
+| 400 | Invalid params, removed `provider=goodreads`, or `reviews=true` |
+| 404 | Book/edition not found |
+| 429 | Abuse protection soft throttle |
+| 503 | Provider not configured (e.g. missing `HARDCOVER_API_TOKEN`) |
+
+---
+
+## Caching & abuse
+
+- Redis optional via `REDIS_URL`; kill switch `DISABLE_REDIS=true`
+- Soft abuse limits: see README (`ABUSE_MAX_REQUESTS_PER_SECOND`, etc.)
