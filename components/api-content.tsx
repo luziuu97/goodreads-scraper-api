@@ -138,6 +138,28 @@ export function ApiContent({ endpoint }: ApiContentProps) {
 
         const data = await response.json();
         setResponse(JSON.stringify(data, null, 2));
+      } else if (endpoint.id === "get-book-formats") {
+        const slug = params.slug;
+        if (!slug) {
+          throw new Error("Slug is required");
+        }
+
+        const queryParams = new URLSearchParams();
+        if (params.language) queryParams.set("language", params.language);
+        if (params.format) queryParams.set("format", params.format);
+        if (params.limit) queryParams.set("limit", params.limit);
+        const queryString = queryParams.toString();
+        const requestUrl = queryString
+          ? `/api/book/formats/${encodeURIComponent(slug)}?${queryString}`
+          : `/api/book/formats/${encodeURIComponent(slug)}`;
+
+        const startTime = performance.now();
+        const response = await fetch(requestUrl);
+        const endTime = performance.now();
+        setRequestTime(endTime - startTime);
+
+        const data = await response.json();
+        setResponse(JSON.stringify(data, null, 2));
       } else if (endpoint.id === "search-books") {
         const query = params.query;
         if (!query) {

@@ -19,6 +19,7 @@ https://gdscraper.bookishnearby.com
 | `/api/book/search` | GET | Search books by title, author, or ISBN |
 | `/api/book/details/:slug` | GET | Get detailed book metadata by provider id/slug |
 | `/api/book/covers/:slug` | GET | List edition covers with image metadata (resolution, color) |
+| `/api/book/formats/:slug` | GET | List editions/formats; filter by language and/or format (Hardcover, no provider param) |
 | `/api/series/search` | GET | Search series by name |
 | `/api/series/:slug` | GET | Series metadata plus ordered books (paginated) |
 
@@ -84,6 +85,33 @@ fetch(
     console.log(data.covers); // all covers with width/height/pixelCount
     console.log(data.bestByResolution); // highest-resolution cover when dimensions are known
   });
+```
+
+### Get book formats (editions)
+
+Hardcover only — no `provider` parameter. Optional `language` and `format` filters.
+
+```javascript
+// All formats
+fetch(`https://gdscraper.bookishnearby.com/api/book/formats/fourth-wing`);
+
+// English ebooks only
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/formats/fourth-wing?language=en&format=ebook`
+);
+
+// Print only (hardcover + paperback), or a specific binding
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/formats/fourth-wing?format=physical`
+);
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/formats/fourth-wing?format=hardcover`
+);
+
+// Original (majority) language
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/formats/fourth-wing?language=original`
+);
 ```
 
 ### Search series
@@ -187,8 +215,9 @@ Successful provider responses are cached aggressively:
 | Empty search | No | — |
 | Successful book details | Yes | ~14 days |
 | Successful book covers | Yes | ~30 days |
+| Successful book formats | Yes | ~30 days (key includes language/format/limit) |
 | Series search with ≥1 result | Yes | ~1 day |
-| Successful series details | Yes | ~14 days |
+| Successful series details | Yes | ~14 days (key includes language/format/limit/offset) |
 | Errors / 4xx / 5xx | No | — |
 
 Cache keys are normalized (sorted params, lowercased query/provider) so equivalent requests share one entry. Set `DISABLE_REDIS=true` to turn caching off at runtime.

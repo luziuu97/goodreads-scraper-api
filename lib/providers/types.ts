@@ -161,7 +161,7 @@ export type NormalizedSeriesBook = {
   /** ISO 639-1 code when known (e.g. en, es). */
   languageCode: string | null;
   language: string | null;
-  /** Normalized format label: ebook | audiobook | physical | null. */
+  /** Normalized format: ebook | audiobook | hardcover | paperback | null. */
   format: string | null;
   formatLabel: string | null;
 };
@@ -219,7 +219,8 @@ export type SeriesDetailsInput = {
    */
   language?: string;
   /**
-   * Optional format filter: ebook | audiobook | physical.
+   * Optional format filter: ebook | audiobook | hardcover | paperback | physical
+   * (physical = hardcover OR paperback).
    */
   format?: string;
 };

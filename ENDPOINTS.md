@@ -175,7 +175,81 @@ Covers are sorted by `pixelCount` descending (unknown dimensions last). On ties,
 
 ---
 
-## 4. Search Series
+## 4. Book Formats
+
+List editions/formats for a book from **Hardcover only** (no `provider` parameter). Filter by language and/or format.
+
+- **Endpoint**: `GET /api/book/formats/:slug`
+- **Path**:
+  - `slug`: Hardcover numeric id or slug
+- **Query parameters**:
+  - `language` (optional): ISO code (`en`, `es`, …), `original` (majority language among editions), or omit for all languages
+  - `format` (optional): `ebook` \| `audiobook` \| `hardcover` \| `paperback` \| `physical` (`physical` = hardcover or paperback)
+  - `limit` (optional): 1–100 (default 50) — max matched editions after filtering
+
+### Example
+
+```
+GET /api/book/formats/fourth-wing
+GET /api/book/formats/fourth-wing?language=en&format=ebook
+GET /api/book/formats/714600?language=original
+GET /api/book/formats/fourth-wing?language=es&format=paperback
+GET /api/book/formats/fourth-wing?format=hardcover
+GET /api/book/formats/fourth-wing?format=physical
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "scrapedURL": "https://hardcover.app/books/fourth-wing",
+  "book": {
+    "id": "714600",
+    "slug": "fourth-wing",
+    "title": "Fourth Wing"
+  },
+  "formats": [
+    {
+      "editionId": 31440211,
+      "title": "Fourth Wing",
+      "format": "ebook",
+      "formatLabel": "Kindle",
+      "editionFormat": "Kindle",
+      "readingFormat": "Ebook",
+      "language": "English",
+      "languageCode": "en",
+      "isbn": null,
+      "isbn10": null,
+      "asin": "B0BGHCXCYB",
+      "pages": 517,
+      "publicationDate": "2023-05-02",
+      "publisher": "Red Tower Books",
+      "cover": "https://...",
+      "usersCount": 12000
+    }
+  ],
+  "filters": {
+    "language": "en",
+    "resolvedLanguage": "en",
+    "originalLanguage": "en",
+    "format": "ebook"
+  },
+  "availableLanguages": [
+    { "code": "en", "name": "English" },
+    { "code": "es", "name": "Spanish; Castilian" }
+  ],
+  "availableFormats": ["audiobook", "ebook", "hardcover", "paperback"],
+  "totalEditions": 78,
+  "totalMatched": 1
+}
+```
+
+Editions are ordered by Hardcover `users_count` descending. Successful responses are cached for about **30 days** (cache key includes language, format, and limit).
+
+---
+
+## 5. Search Series
 
 Search for book series by name. Returns **series-shaped** results (not books).
 
@@ -222,7 +296,7 @@ Empty series search results are not cached. Successful non-empty results are cac
 
 ---
 
-## 5. Series Details
+## 6. Series Details
 
 Retrieve series metadata and its ordered books. Use `limit` / `offset` to page through long series lists.
 
@@ -236,7 +310,7 @@ By default, results are **deduped to one book per series position** in the serie
   - `limit` (optional): 1–100 (default 50)
   - `offset` (optional): non-negative integer (default 0)
   - `language` (optional): ISO code (`en`, `es`, …) or `original` (**default**). Original = majority language among featured non-compilation books.
-  - `format` (optional): `ebook` \| `audiobook` \| `physical` — prefer editions of that format (title/cover when available)
+  - `format` (optional): `ebook` \| `audiobook` \| `hardcover` \| `paperback` \| `physical` — prefer editions of that format (`physical` = hardcover or paperback)
 
 ### Example
 
@@ -285,7 +359,7 @@ GET /api/series/41764?provider=hardcover&limit=50&offset=0
       "compilation": false,
       "languageCode": "en",
       "language": "English",
-      "format": "physical",
+      "format": "hardcover",
       "formatLabel": "Hardcover"
     }
   ],
@@ -338,3 +412,11 @@ Use structured book search/details instead.
 
 - Redis optional via `REDIS_URL`; kill switch `DISABLE_REDIS=true`
 - Soft abuse limits: see README (`ABUSE_MAX_REQUESTS_PER_SECOND`, etc.)
+- Successful responses are cached (logical keys include filter params):
+
+| Endpoint | TTL |
+|----------|-----|
+| Book / series search (≥1 hit) | ~1 day |
+| Book details, series details | ~14 days |
+| Book covers, book formats | ~30 days |
+| Empty search / errors | not cached |

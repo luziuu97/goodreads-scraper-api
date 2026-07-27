@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import {
   BookOpen,
   Images,
+  Layers,
   Library,
   ListOrdered,
   Search,
@@ -60,6 +61,8 @@ export function ApiSidebar({
         return <BookOpen className="h-5 w-5" />;
       case "get-book-covers":
         return <Images className="h-5 w-5" />;
+      case "get-book-formats":
+        return <Layers className="h-5 w-5" />;
       case "search-books":
         return <Search className="h-5 w-5" />;
       case "search-series":

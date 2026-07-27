@@ -9,6 +9,11 @@ import {
   getBookDetailsCodeSnippets,
 } from "@/data/api-endpoint/get-book-details";
 import {
+  getBookFormatsApiParameters,
+  getBookFormatsApiResponse,
+  getBookFormatsCodeSnippets,
+} from "@/data/api-endpoint/get-book-formats";
+import {
   getSeriesDetailsApiParameters,
   getSeriesDetailsApiResponse,
   getSeriesDetailsCodeSnippets,
@@ -55,6 +60,7 @@ export interface Endpoint {
 export type ApiEndPointID =
   | "get_book_details"
   | "get_book_covers"
+  | "get_book_formats"
   | "search_books"
   | "search_series"
   | "get_series_details";
@@ -83,6 +89,18 @@ export const endpoints: Endpoint[] = [
     parameters: getBookCoversApiParameters,
     exampleResponse: getBookCoversApiResponse,
     codeSnippets: getBookCoversCodeSnippets,
+  },
+  {
+    id: "get-book-formats",
+    name: "Get Book Formats",
+    description:
+      "List editions/formats for a book (Hardcover). Filter by language and/or format. No provider parameter.",
+    method: "GET",
+    url: "/api/book/formats/:slug",
+    route: "/api/book/formats",
+    parameters: getBookFormatsApiParameters,
+    exampleResponse: getBookFormatsApiResponse,
+    codeSnippets: getBookFormatsCodeSnippets,
   },
   {
     id: "search-books",

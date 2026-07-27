@@ -6,11 +6,14 @@ import { env } from 'next-runtime-env';
 /** Search results TTL: 1 day */
 export const CACHE_TTL_SEARCH = 24 * 60 * 60;
 
-/** Book details / enrichment TTL: 14 days */
+/** Book / series details TTL: 14 days */
 export const CACHE_TTL_DETAILS = 14 * 24 * 60 * 60;
 
-/** Cover-related data TTL: 30 days */
+/** Cover + format/edition catalog data TTL: 30 days (stable media metadata) */
 export const CACHE_TTL_COVER = 30 * 24 * 60 * 60;
+
+/** Alias for book formats / edition lists (same tier as covers). */
+export const CACHE_TTL_FORMATS = CACHE_TTL_COVER;
 
 /** @deprecated Use CACHE_TTL_DETAILS — kept for callers that still pass default */
 export const CACHE_TTL = CACHE_TTL_DETAILS;

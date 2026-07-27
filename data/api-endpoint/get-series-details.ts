@@ -43,8 +43,8 @@ export const getSeriesDetailsApiParameters: Parameter[] = [
     type: "select",
     required: false,
     description:
-      "Optional format filter. Prefers matching editions for title/cover when available.",
-    options: ["ebook", "audiobook", "physical"],
+      "Optional format filter. physical = hardcover or paperback; or pick hardcover / paperback specifically.",
+    options: ["ebook", "audiobook", "hardcover", "paperback", "physical"],
   },
 ];
 
@@ -82,7 +82,7 @@ export const getSeriesDetailsApiResponse = {
       compilation: false,
       languageCode: "en",
       language: "English",
-      format: "physical",
+      format: "hardcover",
       formatLabel: "Hardcover",
     },
     {
