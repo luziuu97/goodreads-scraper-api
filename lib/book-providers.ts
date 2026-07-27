@@ -4,26 +4,40 @@
  */
 
 import {
+  getCoversAggregate,
+  getCoversByProviderId,
   getDetailsAggregate,
   getDetailsByProviderId,
+  getSeriesDetailsAggregate,
+  getSeriesDetailsByProviderId,
   searchAggregate,
   searchByProviderId,
+  searchSeriesAggregate,
+  searchSeriesByProviderId,
 } from "@/lib/providers/aggregate";
 import { parseProvider } from "@/lib/providers/parse-provider";
 import type {
   BookProviderMode,
+  NormalizedBookCoversResponse,
   NormalizedBookDetailsResponse,
-  NormalizedSearchBook,
   NormalizedSearchResponse,
+  NormalizedSeriesDetailsResponse,
+  NormalizedSeriesSearchResponse,
   ProviderId,
 } from "@/lib/providers/types";
 
 export type { BookProviderMode as BookProvider };
 export type {
   BookMetadataSource,
+  NormalizedBookCoversResponse,
   NormalizedBookDetailsResponse,
+  NormalizedEditionCover,
   NormalizedSearchBook,
   NormalizedSearchResponse,
+  NormalizedSearchSeries,
+  NormalizedSeriesBook,
+  NormalizedSeriesDetailsResponse,
+  NormalizedSeriesSearchResponse,
   ProviderId,
 } from "@/lib/providers/types";
 
@@ -56,4 +70,48 @@ export async function getBookDetailsByProvider(input: {
   }
 
   return getDetailsByProviderId(provider, { slug, editionId });
+}
+
+export async function getBookCoversByProvider(input: {
+  provider: BookProviderMode;
+  slug: string;
+  limit: number;
+  onlyWithCover: boolean;
+}): Promise<NormalizedBookCoversResponse> {
+  const { provider, slug, limit, onlyWithCover } = input;
+
+  if (provider === "aggregate") {
+    return getCoversAggregate({ slug, limit, onlyWithCover });
+  }
+
+  return getCoversByProviderId(provider, { slug, limit, onlyWithCover });
+}
+
+export async function searchSeriesByProvider(input: {
+  provider: BookProviderMode;
+  query: string;
+  limit: number;
+}): Promise<NormalizedSeriesSearchResponse> {
+  const { provider, query, limit } = input;
+
+  if (provider === "aggregate") {
+    return searchSeriesAggregate({ query, limit });
+  }
+
+  return searchSeriesByProviderId(provider, { query, limit });
+}
+
+export async function getSeriesDetailsByProvider(input: {
+  provider: BookProviderMode;
+  slug: string;
+  limit: number;
+  offset: number;
+}): Promise<NormalizedSeriesDetailsResponse> {
+  const { provider, slug, limit, offset } = input;
+
+  if (provider === "aggregate") {
+    return getSeriesDetailsAggregate({ slug, limit, offset });
+  }
+
+  return getSeriesDetailsByProviderId(provider, { slug, limit, offset });
 }

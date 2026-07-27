@@ -3,7 +3,12 @@ import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
 const HARDCOVER_GRAPHQL_URL = "https://api.hardcover.app/v1/graphql";
 
 type HardcoverImage = {
+  id?: number | string | null;
   url?: string | null;
+  width?: number | null;
+  height?: number | null;
+  ratio?: number | null;
+  color?: string | null;
 } | null;
 
 type HardcoverSearchResult = {
@@ -354,7 +359,24 @@ function normalizeEdition(
   };
 }
 
-function editionSelection(includeBook = false): string {
+function imageSelection(): string {
+  return `
+    id
+    url
+    width
+    height
+    ratio
+    color
+  `;
+}
+
+function editionSelection(includeBook = false, includeImageMeta = false): string {
+  const imageFields = includeImageMeta
+    ? imageSelection()
+    : `
+      url
+    `;
+
   return `
     id
     title
@@ -366,7 +388,7 @@ function editionSelection(includeBook = false): string {
     isbn_13
     asin
     image {
-      url
+      ${imageFields}
     }
     publisher {
       name
@@ -378,6 +400,56 @@ function editionSelection(includeBook = false): string {
     }
     ` : ""}
   `;
+}
+
+function toPositiveInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeImageMeta(image: HardcoverImage): {
+  url: string;
+  imageId: number | null;
+  width: number | null;
+  height: number | null;
+  ratio: number | null;
+  color: string | null;
+  pixelCount: number | null;
+} {
+  const url = toCoverUrl(image);
+  const width = toPositiveInt(image?.width);
+  const height = toPositiveInt(image?.height);
+  const pixelCount =
+    width !== null && height !== null ? width * height : null;
+
+  // Hardcover sometimes stores ratio as 0; derive from dimensions when possible.
+  const rawRatio = toFiniteNumber(image?.ratio);
+  const ratio =
+    rawRatio !== null && rawRatio > 0
+      ? rawRatio
+      : width !== null && height !== null && height > 0
+        ? width / height
+        : null;
+
+  return {
+    url,
+    imageId: toPositiveInt(image?.id),
+    width,
+    height,
+    ratio,
+    color: trimToNull(typeof image?.color === "string" ? image.color : null),
+    pixelCount,
+  };
 }
 
 function normalizeIsbnQuery(query: string): string {
@@ -717,6 +789,596 @@ export async function fetchHardcoverBookDetails(
       questions: "",
       questionsURL: "",
       lastScraped: new Date().toISOString(),
+    },
+  };
+}
+
+type HardcoverCoversEdition = {
+  id?: number | null;
+  title?: string | null;
+  release_date?: string | null;
+  pages?: number | null;
+  edition_format?: string | null;
+  isbn_10?: string | null;
+  isbn_13?: string | null;
+  asin?: string | null;
+  image?: HardcoverImage;
+  publisher?: {
+    name?: string | null;
+  } | null;
+  language?: {
+    language?: string | null;
+    code2?: string | null;
+  } | null;
+};
+
+type HardcoverCoversBook = {
+  id: number;
+  slug: string;
+  title: string;
+  default_cover_edition_id?: number | null;
+  editions?: HardcoverCoversEdition[] | null;
+  editions_count?: number | null;
+};
+
+export type HardcoverNormalizedEditionCover = {
+  editionId: number;
+  title: string | null;
+  url: string;
+  width: number | null;
+  height: number | null;
+  ratio: number | null;
+  color: string | null;
+  pixelCount: number | null;
+  imageId: number | null;
+  format: string | null;
+  isbn: string | null;
+  isbn10: string | null;
+  asin: string | null;
+  publicationDate: string | null;
+  pages: number | null;
+  publisher: string | null;
+  language: string | null;
+  languageCode: string | null;
+  isDefault: boolean;
+};
+
+export type HardcoverNormalizedBookCovers = {
+  scrapedURL: string;
+  book: {
+    id: string;
+    slug: string;
+    title: string;
+  };
+  covers: HardcoverNormalizedEditionCover[];
+  bestByResolution: {
+    editionId: number;
+    url: string;
+    width: number | null;
+    height: number | null;
+    pixelCount: number | null;
+  } | null;
+  totalCovers: number;
+  totalEditions: number;
+};
+
+/**
+ * Fetch edition covers for a book, including Hardcover image dimensions when available.
+ * Sorted by resolution (pixel count) descending; default cover preferred on ties.
+ */
+export async function fetchHardcoverBookCovers(
+  slugOrId: string,
+  options: { limit?: number; onlyWithCover?: boolean } = {}
+): Promise<HardcoverNormalizedBookCovers> {
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+  const onlyWithCover = options.onlyWithCover !== false;
+  const numericId = /^\d+$/.test(slugOrId) ? Number(slugOrId) : null;
+
+  const coversSelection = `
+    id
+    slug
+    title
+    default_cover_edition_id
+    editions_count
+    editions(limit: $limit, order_by: { users_count: desc }) {
+      id
+      title
+      release_date
+      pages
+      edition_format
+      isbn_10
+      isbn_13
+      asin
+      image {
+        ${imageSelection()}
+      }
+      publisher {
+        name
+      }
+      language {
+        language
+        code2
+      }
+    }
+  `;
+
+  const coversQuery =
+    numericId !== null
+      ? `
+      query GetBookCoversById($numericId: Int!, $limit: Int!) {
+        books(where: { id: { _eq: $numericId } }, limit: 1) {
+          ${coversSelection}
+        }
+      }
+    `
+      : `
+      query GetBookCoversBySlug($slug: String!, $limit: Int!) {
+        books(where: { slug: { _eq: $slug } }, limit: 1) {
+          ${coversSelection}
+        }
+      }
+    `;
+
+  const data = await hardcoverGraphQLRequest<{ books?: HardcoverCoversBook[] }>(
+    coversQuery,
+    numericId !== null
+      ? { numericId, limit }
+      : { slug: slugOrId, limit }
+  );
+
+  const book = Array.isArray(data.books) ? data.books[0] : null;
+  if (!book) {
+    throw new Error(`No Hardcover book found for slug "${slugOrId}"`);
+  }
+
+  const defaultCoverEditionId =
+    typeof book.default_cover_edition_id === "number"
+      ? book.default_cover_edition_id
+      : null;
+
+  const rawEditions = Array.isArray(book.editions) ? book.editions : [];
+  const totalEditions =
+    typeof book.editions_count === "number" && Number.isFinite(book.editions_count)
+      ? book.editions_count
+      : rawEditions.length;
+
+  const covers: HardcoverNormalizedEditionCover[] = [];
+
+  for (const edition of rawEditions) {
+    if (typeof edition?.id !== "number") {
+      continue;
+    }
+
+    const imageMeta = normalizeImageMeta(edition.image || null);
+    if (onlyWithCover && !imageMeta.url) {
+      continue;
+    }
+
+    covers.push({
+      editionId: edition.id,
+      title: trimToNull(edition.title),
+      url: imageMeta.url,
+      width: imageMeta.width,
+      height: imageMeta.height,
+      ratio: imageMeta.ratio,
+      color: imageMeta.color,
+      pixelCount: imageMeta.pixelCount,
+      imageId: imageMeta.imageId,
+      format: trimToNull(edition.edition_format),
+      isbn: trimToNull(edition.isbn_13),
+      isbn10: trimToNull(edition.isbn_10),
+      asin: trimToNull(edition.asin),
+      publicationDate: trimToNull(edition.release_date),
+      pages: typeof edition.pages === "number" ? edition.pages : null,
+      publisher: trimToNull(edition.publisher?.name),
+      language: trimToNull(edition.language?.language),
+      languageCode: trimToNull(edition.language?.code2),
+      isDefault: defaultCoverEditionId === edition.id,
+    });
+  }
+
+  // Prefer higher resolution; on equal/unknown resolution prefer default cover, then edition id.
+  covers.sort((a, b) => {
+    const aPixels = a.pixelCount ?? -1;
+    const bPixels = b.pixelCount ?? -1;
+    if (aPixels !== bPixels) {
+      return bPixels - aPixels;
+    }
+    if (a.isDefault !== b.isDefault) {
+      return a.isDefault ? -1 : 1;
+    }
+    return a.editionId - b.editionId;
+  });
+
+  const best =
+    covers.find((cover) => cover.url && cover.pixelCount !== null) ||
+    covers.find((cover) => cover.url) ||
+    null;
+
+  return {
+    scrapedURL: `https://hardcover.app/books/${book.slug}`,
+    book: {
+      id: String(book.id),
+      slug: book.slug,
+      title: book.title,
+    },
+    covers,
+    bestByResolution: best
+      ? {
+          editionId: best.editionId,
+          url: best.url,
+          width: best.width,
+          height: best.height,
+          pixelCount: best.pixelCount,
+        }
+      : null,
+    totalCovers: covers.filter((cover) => Boolean(cover.url)).length,
+    totalEditions,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Series
+// ---------------------------------------------------------------------------
+
+type HardcoverSeriesSearchResult = {
+  id?: number | string;
+  slug?: string;
+  name?: string;
+  author_name?: string;
+  books_count?: number;
+  primary_books_count?: number;
+  readers_count?: number;
+  books?: string[];
+  author?: {
+    id?: number | null;
+    name?: string | null;
+    slug?: string | null;
+  } | null;
+};
+
+type HardcoverSeriesSearchHit = {
+  document?: HardcoverSeriesSearchResult | null;
+};
+
+type HardcoverSeriesSearchResults = {
+  found?: number | null;
+  hits?: HardcoverSeriesSearchHit[] | null;
+};
+
+export type HardcoverNormalizedSearchSeries = {
+  id: string;
+  name: string;
+  slug: string;
+  author?: string;
+  booksCount?: number;
+  primaryBooksCount?: number;
+  readersCount?: number;
+  sampleBooks?: string[];
+};
+
+export type HardcoverNormalizedSeriesBook = {
+  id: string;
+  slug: string;
+  title: string;
+  author: string;
+  cover: string;
+  rating?: number;
+  publicationDate?: string | null;
+  position: number | null;
+  positionLabel: string | null;
+  featured: boolean;
+  compilation: boolean;
+};
+
+export type HardcoverNormalizedSeriesDetails = {
+  scrapedURL: string;
+  series: {
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    booksCount: number;
+    primaryBooksCount: number | null;
+    isCompleted: boolean | null;
+    author: { id: number; name: string; url: string } | null;
+  };
+  books: HardcoverNormalizedSeriesBook[];
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    total: number;
+  };
+};
+
+type HardcoverSeriesDetailsRow = {
+  id: number;
+  slug: string;
+  name: string;
+  description?: string | null;
+  books_count?: number | null;
+  primary_books_count?: number | null;
+  is_completed?: boolean | null;
+  author?: {
+    id?: number | null;
+    name?: string | null;
+    slug?: string | null;
+  } | null;
+  book_series?: Array<{
+    id?: number | null;
+    position?: number | null;
+    details?: string | null;
+    featured?: boolean | null;
+    compilation?: boolean | null;
+    book?: {
+      id?: number | null;
+      slug?: string | null;
+      title?: string | null;
+      rating?: number | null;
+      release_date?: string | null;
+      contributions?: Array<{
+        author?: {
+          id?: number | null;
+          name?: string | null;
+          slug?: string | null;
+        } | null;
+      }> | null;
+      image?: HardcoverImage;
+      default_cover_edition?: {
+        image?: HardcoverImage;
+      } | null;
+    } | null;
+  }> | null;
+};
+
+export async function searchHardcoverSeries(input: {
+  query: string;
+  limit: number;
+}): Promise<{ totalResults: number; series: HardcoverNormalizedSearchSeries[] }> {
+  const searchQuery = `
+    query SearchSeries($query: String!, $perPage: Int!, $page: Int!) {
+      search(
+        query: $query
+        query_type: "Series"
+        per_page: $perPage
+        page: $page
+      ) {
+        results
+      }
+    }
+  `;
+
+  const data = await hardcoverGraphQLRequest<{
+    search: {
+      results?: HardcoverSeriesSearchResults | null;
+    };
+  }>(searchQuery, {
+    query: input.query,
+    perPage: input.limit,
+    page: 1,
+  });
+
+  const rawHits = Array.isArray(data.search?.results?.hits)
+    ? data.search.results.hits
+    : [];
+
+  const series = rawHits
+    .map((hit): HardcoverNormalizedSearchSeries | null => {
+      const result = hit.document;
+      const name = typeof result?.name === "string" ? result.name.trim() : "";
+      if (!name) {
+        return null;
+      }
+
+      const slug =
+        typeof result?.slug === "string" && result.slug.trim()
+          ? result.slug.trim()
+          : "";
+      const id =
+        typeof result?.id === "number" || typeof result?.id === "string"
+          ? String(result.id)
+          : slug || name;
+
+      const authorFromObject = result?.author?.name?.trim() || "";
+      const authorFromField =
+        typeof result?.author_name === "string" ? result.author_name.trim() : "";
+      const author = authorFromObject || authorFromField || undefined;
+
+      const sampleBooks = Array.isArray(result?.books)
+        ? result.books
+            .map((title) => (typeof title === "string" ? title.trim() : ""))
+            .filter(Boolean)
+            .slice(0, 10)
+        : undefined;
+
+      return {
+        id,
+        name,
+        slug: slug || id,
+        author,
+        booksCount: toNumber(result?.books_count),
+        primaryBooksCount: toNumber(result?.primary_books_count),
+        readersCount: toNumber(result?.readers_count),
+        sampleBooks: sampleBooks && sampleBooks.length > 0 ? sampleBooks : undefined,
+      };
+    })
+    .filter((entry): entry is HardcoverNormalizedSearchSeries => Boolean(entry));
+
+  return {
+    totalResults:
+      typeof data.search?.results?.found === "number" &&
+      Number.isFinite(data.search.results.found)
+        ? data.search.results.found
+        : series.length,
+    series,
+  };
+}
+
+export async function fetchHardcoverSeriesDetails(
+  slugOrId: string,
+  options: { limit?: number; offset?: number } = {}
+): Promise<HardcoverNormalizedSeriesDetails> {
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+  const offset = Math.max(options.offset ?? 0, 0);
+  const numericId = /^\d+$/.test(slugOrId) ? Number(slugOrId) : null;
+
+  const seriesSelection = `
+    id
+    slug
+    name
+    description
+    books_count
+    primary_books_count
+    is_completed
+    author {
+      id
+      name
+      slug
+    }
+    book_series(limit: $limit, offset: $offset, order_by: { position: asc }) {
+      id
+      position
+      details
+      featured
+      compilation
+      book {
+        id
+        slug
+        title
+        rating
+        release_date
+        contributions {
+          author {
+            id
+            name
+            slug
+          }
+        }
+        image {
+          url
+        }
+        default_cover_edition {
+          image {
+            url
+          }
+        }
+      }
+    }
+  `;
+
+  const detailsQuery =
+    numericId !== null
+      ? `
+      query GetSeriesDetailsById($numericId: Int!, $limit: Int!, $offset: Int!) {
+        series(where: { id: { _eq: $numericId } }, limit: 1) {
+          ${seriesSelection}
+        }
+      }
+    `
+      : `
+      query GetSeriesDetailsBySlug($slug: String!, $limit: Int!, $offset: Int!) {
+        series(where: { slug: { _eq: $slug } }, limit: 1) {
+          ${seriesSelection}
+        }
+      }
+    `;
+
+  const data = await hardcoverGraphQLRequest<{ series?: HardcoverSeriesDetailsRow[] }>(
+    detailsQuery,
+    numericId !== null
+      ? { numericId, limit, offset }
+      : { slug: slugOrId, limit, offset }
+  );
+
+  const series = Array.isArray(data.series) ? data.series[0] : null;
+  if (!series) {
+    throw new Error(`No Hardcover series found for slug "${slugOrId}"`);
+  }
+
+  const authorName = series.author?.name?.trim() || "";
+  const author =
+    authorName
+      ? {
+          id: typeof series.author?.id === "number" ? series.author.id : 0,
+          name: authorName,
+          url: series.author?.slug
+            ? `https://hardcover.app/authors/${series.author.slug}`
+            : "",
+        }
+      : null;
+
+  const booksCount =
+    typeof series.books_count === "number" && Number.isFinite(series.books_count)
+      ? series.books_count
+      : 0;
+
+  const books: HardcoverNormalizedSeriesBook[] = [];
+  const rawEntries = Array.isArray(series.book_series) ? series.book_series : [];
+
+  for (const entry of rawEntries) {
+    const book = entry.book;
+    const title = typeof book?.title === "string" ? book.title.trim() : "";
+    if (!title) {
+      continue;
+    }
+
+    const authors =
+      book?.contributions
+        ?.map((contribution) => contribution.author?.name?.trim() || "")
+        .filter(Boolean) || [];
+
+    const id =
+      typeof book?.id === "number"
+        ? String(book.id)
+        : typeof book?.slug === "string" && book.slug
+          ? book.slug
+          : title;
+
+    const cover =
+      toCoverUrl(book?.image || null) ||
+      toCoverUrl(book?.default_cover_edition?.image || null);
+
+    books.push({
+      id,
+      slug: typeof book?.slug === "string" ? book.slug : id,
+      title,
+      author: authors.join(", ") || authorName,
+      cover,
+      rating: toNumber(book?.rating),
+      publicationDate: trimToNull(book?.release_date),
+      position:
+        typeof entry.position === "number" && Number.isFinite(entry.position)
+          ? entry.position
+          : null,
+      positionLabel: trimToNull(entry.details),
+      featured: Boolean(entry.featured),
+      compilation: Boolean(entry.compilation),
+    });
+  }
+
+  return {
+    scrapedURL: `https://hardcover.app/series/${series.slug}`,
+    series: {
+      id: String(series.id),
+      slug: series.slug,
+      name: series.name,
+      description: trimToNull(series.description),
+      booksCount,
+      primaryBooksCount:
+        typeof series.primary_books_count === "number"
+          ? series.primary_books_count
+          : null,
+      isCompleted:
+        typeof series.is_completed === "boolean" ? series.is_completed : null,
+      author,
+    },
+    books,
+    pagination: {
+      limit,
+      offset,
+      returned: books.length,
+      total: booksCount,
     },
   };
 }

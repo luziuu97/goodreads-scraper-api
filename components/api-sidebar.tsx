@@ -7,6 +7,9 @@ import { Badge } from "@/components/ui/badge"
 
 import {
   BookOpen,
+  Images,
+  Library,
+  ListOrdered,
   Search,
   Info,
   GitBranch,
@@ -55,8 +58,14 @@ export function ApiSidebar({
     switch (id) {
       case "get-book-details":
         return <BookOpen className="h-5 w-5" />;
+      case "get-book-covers":
+        return <Images className="h-5 w-5" />;
       case "search-books":
         return <Search className="h-5 w-5" />;
+      case "search-series":
+        return <Library className="h-5 w-5" />;
+      case "get-series-details":
+        return <ListOrdered className="h-5 w-5" />;
       case "about":
         return <Info className="h-5 w-5" />;
       case "changelog":

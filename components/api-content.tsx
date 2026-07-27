@@ -116,6 +116,28 @@ export function ApiContent({ endpoint }: ApiContentProps) {
 
         const data = await response.json();
         setResponse(JSON.stringify(data, null, 2));
+      } else if (endpoint.id === "get-book-covers") {
+        const slug = params.slug;
+        if (!slug) {
+          throw new Error("Slug is required");
+        }
+
+        const queryParams = new URLSearchParams();
+        if (params.provider) queryParams.set("provider", params.provider);
+        if (params.limit) queryParams.set("limit", params.limit);
+        if (params.onlyWithCover) queryParams.set("onlyWithCover", params.onlyWithCover);
+        const queryString = queryParams.toString();
+        const requestUrl = queryString
+          ? `/api/book/covers/${encodeURIComponent(slug)}?${queryString}`
+          : `/api/book/covers/${encodeURIComponent(slug)}`;
+
+        const startTime = performance.now();
+        const response = await fetch(requestUrl);
+        const endTime = performance.now();
+        setRequestTime(endTime - startTime);
+
+        const data = await response.json();
+        setResponse(JSON.stringify(data, null, 2));
       } else if (endpoint.id === "search-books") {
         const query = params.query;
         if (!query) {
@@ -130,6 +152,46 @@ export function ApiContent({ endpoint }: ApiContentProps) {
 
         const startTime = performance.now();
         const response = await fetch(`/api/book/search?${queryParams.toString()}`);
+        const endTime = performance.now();
+        setRequestTime(endTime - startTime);
+
+        const data = await response.json();
+        setResponse(JSON.stringify(data, null, 2));
+      } else if (endpoint.id === "search-series") {
+        const query = params.query;
+        if (!query) {
+          throw new Error("Query is required");
+        }
+
+        const queryParams = new URLSearchParams();
+        queryParams.set("query", query);
+        if (params.provider) queryParams.set("provider", params.provider);
+        if (params.limit) queryParams.set("limit", params.limit);
+
+        const startTime = performance.now();
+        const response = await fetch(`/api/series/search?${queryParams.toString()}`);
+        const endTime = performance.now();
+        setRequestTime(endTime - startTime);
+
+        const data = await response.json();
+        setResponse(JSON.stringify(data, null, 2));
+      } else if (endpoint.id === "get-series-details") {
+        const slug = params.slug;
+        if (!slug) {
+          throw new Error("Slug is required");
+        }
+
+        const queryParams = new URLSearchParams();
+        if (params.provider) queryParams.set("provider", params.provider);
+        if (params.limit) queryParams.set("limit", params.limit);
+        if (params.offset) queryParams.set("offset", params.offset);
+        const queryString = queryParams.toString();
+        const requestUrl = queryString
+          ? `/api/series/${encodeURIComponent(slug)}?${queryString}`
+          : `/api/series/${encodeURIComponent(slug)}`;
+
+        const startTime = performance.now();
+        const response = await fetch(requestUrl);
         const endTime = performance.now();
         setRequestTime(endTime - startTime);
 

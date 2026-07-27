@@ -4,12 +4,19 @@ import {
   listProviders,
 } from "@/lib/providers/registry";
 import type {
+  BookCoversInput,
   BookDetailsInput,
   BookSearchInput,
+  NormalizedBookCoversResponse,
   NormalizedBookDetailsResponse,
   NormalizedSearchBook,
   NormalizedSearchResponse,
+  NormalizedSearchSeries,
+  NormalizedSeriesDetailsResponse,
+  NormalizedSeriesSearchResponse,
   ProviderId,
+  SeriesDetailsInput,
+  SeriesSearchInput,
 } from "@/lib/providers/types";
 
 function normalizeIsbn(value: string | null | undefined): string | null {
@@ -199,4 +206,199 @@ export async function getDetailsByProviderId(
   }
 
   return provider.getDetails(input);
+}
+
+export async function getCoversAggregate(
+  input: BookCoversInput
+): Promise<NormalizedBookCoversResponse> {
+  ensureProvidersConfigured();
+
+  const providers = listAvailableProviders();
+  const errors: Error[] = [];
+
+  for (const provider of providers) {
+    try {
+      const covers = await provider.getCovers(input);
+      return {
+        ...covers,
+        provider: "aggregate",
+      };
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  throw errors[0] || new Error("No provider could resolve book covers");
+}
+
+export async function getCoversByProviderId(
+  providerId: ProviderId,
+  input: BookCoversInput
+): Promise<NormalizedBookCoversResponse> {
+  const provider = getProvider(providerId);
+  if (!provider) {
+    throw new Error(`Provider "${providerId}" is not registered`);
+  }
+  if (!provider.isAvailable()) {
+    throw new Error(
+      providerId === "hardcover"
+        ? "HARDCOVER_API_TOKEN is required to use provider=hardcover"
+        : `Provider "${providerId}" is not configured`
+    );
+  }
+
+  return provider.getCovers(input);
+}
+
+function seriesDedupeKey(series: NormalizedSearchSeries): string {
+  if (series.slug) {
+    return `slug:${series.slug.trim().toLowerCase()}`;
+  }
+  return `name:${series.name.trim().toLowerCase()}|${(series.author || "").trim().toLowerCase()}`;
+}
+
+function mergeSeries(
+  a: NormalizedSearchSeries,
+  b: NormalizedSearchSeries
+): NormalizedSearchSeries {
+  return {
+    id: a.id || b.id,
+    provider: a.provider,
+    name: a.name || b.name,
+    slug: a.slug || b.slug,
+    author: a.author || b.author,
+    booksCount: a.booksCount ?? b.booksCount,
+    primaryBooksCount: a.primaryBooksCount ?? b.primaryBooksCount,
+    readersCount: a.readersCount ?? b.readersCount,
+    sampleBooks:
+      (a.sampleBooks?.length ? a.sampleBooks : undefined) ||
+      (b.sampleBooks?.length ? b.sampleBooks : undefined),
+  };
+}
+
+export function dedupeSearchSeries(
+  series: NormalizedSearchSeries[]
+): NormalizedSearchSeries[] {
+  const byKey = new Map<string, NormalizedSearchSeries>();
+
+  for (const entry of series) {
+    const key = seriesDedupeKey(entry);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, entry);
+    } else {
+      byKey.set(key, mergeSeries(existing, entry));
+    }
+  }
+
+  return Array.from(byKey.values());
+}
+
+export async function searchSeriesAggregate(
+  input: SeriesSearchInput
+): Promise<NormalizedSeriesSearchResponse> {
+  ensureProvidersConfigured();
+
+  const providers = listAvailableProviders();
+  const settled = await Promise.allSettled(providers.map((p) => p.searchSeries(input)));
+
+  const series: NormalizedSearchSeries[] = [];
+  let lastError: Error | null = null;
+
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      series.push(...result.value);
+    } else {
+      lastError =
+        result.reason instanceof Error
+          ? result.reason
+          : new Error(String(result.reason));
+    }
+  }
+
+  const merged = dedupeSearchSeries(series).slice(0, input.limit);
+
+  if (merged.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {
+    throw lastError;
+  }
+
+  return {
+    success: true,
+    provider: "aggregate",
+    results: {
+      query: input.query,
+      totalResults: merged.length,
+      series: merged,
+    },
+  };
+}
+
+export async function searchSeriesByProviderId(
+  providerId: ProviderId,
+  input: SeriesSearchInput
+): Promise<NormalizedSeriesSearchResponse> {
+  const provider = getProvider(providerId);
+  if (!provider) {
+    throw new Error(`Provider "${providerId}" is not registered`);
+  }
+  if (!provider.isAvailable()) {
+    throw new Error(
+      providerId === "hardcover"
+        ? "HARDCOVER_API_TOKEN is required to use provider=hardcover"
+        : `Provider "${providerId}" is not configured`
+    );
+  }
+
+  const series = await provider.searchSeries(input);
+  return {
+    success: true,
+    provider: providerId,
+    results: {
+      query: input.query,
+      totalResults: series.length,
+      series: series.slice(0, input.limit),
+    },
+  };
+}
+
+export async function getSeriesDetailsAggregate(
+  input: SeriesDetailsInput
+): Promise<NormalizedSeriesDetailsResponse> {
+  ensureProvidersConfigured();
+
+  const providers = listAvailableProviders();
+  const errors: Error[] = [];
+
+  for (const provider of providers) {
+    try {
+      const details = await provider.getSeriesDetails(input);
+      return {
+        ...details,
+        provider: "aggregate",
+      };
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  throw errors[0] || new Error("No provider could resolve series details");
+}
+
+export async function getSeriesDetailsByProviderId(
+  providerId: ProviderId,
+  input: SeriesDetailsInput
+): Promise<NormalizedSeriesDetailsResponse> {
+  const provider = getProvider(providerId);
+  if (!provider) {
+    throw new Error(`Provider "${providerId}" is not registered`);
+  }
+  if (!provider.isAvailable()) {
+    throw new Error(
+      providerId === "hardcover"
+        ? "HARDCOVER_API_TOKEN is required to use provider=hardcover"
+        : `Provider "${providerId}" is not configured`
+    );
+  }
+
+  return provider.getSeriesDetails(input);
 }

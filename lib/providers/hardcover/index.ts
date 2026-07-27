@@ -1,14 +1,23 @@
 import { getHardcoverApiToken } from "@/lib/api-config";
 import {
+  fetchHardcoverBookCovers,
   fetchHardcoverBookDetails,
+  fetchHardcoverSeriesDetails,
   searchHardcoverBooks,
+  searchHardcoverSeries,
 } from "@/lib/providers/hardcover/client";
 import type {
+  BookCoversInput,
   BookDataProvider,
   BookDetailsInput,
   BookSearchInput,
+  NormalizedBookCoversResponse,
   NormalizedBookDetailsResponse,
   NormalizedSearchBook,
+  NormalizedSearchSeries,
+  NormalizedSeriesDetailsResponse,
+  SeriesDetailsInput,
+  SeriesSearchInput,
 } from "@/lib/providers/types";
 
 export const hardcoverProvider: BookDataProvider = {
@@ -48,6 +57,63 @@ export const hardcoverProvider: BookDataProvider = {
         ...details.book,
         provider: "hardcover",
       },
+    };
+  },
+
+  async getCovers(input: BookCoversInput): Promise<NormalizedBookCoversResponse> {
+    const covers = await fetchHardcoverBookCovers(input.slug, {
+      limit: input.limit,
+      onlyWithCover: input.onlyWithCover,
+    });
+
+    return {
+      success: true,
+      provider: "hardcover",
+      scrapedURL: covers.scrapedURL,
+      book: {
+        ...covers.book,
+        provider: "hardcover",
+      },
+      covers: covers.covers,
+      bestByResolution: covers.bestByResolution,
+      totalCovers: covers.totalCovers,
+      totalEditions: covers.totalEditions,
+    };
+  },
+
+  async searchSeries(input: SeriesSearchInput): Promise<NormalizedSearchSeries[]> {
+    const results = await searchHardcoverSeries(input);
+    return results.series.map((series) => ({
+      id: series.id,
+      provider: "hardcover" as const,
+      name: series.name,
+      slug: series.slug,
+      author: series.author,
+      booksCount: series.booksCount,
+      primaryBooksCount: series.primaryBooksCount,
+      readersCount: series.readersCount,
+      sampleBooks: series.sampleBooks,
+    }));
+  },
+
+  async getSeriesDetails(
+    input: SeriesDetailsInput
+  ): Promise<NormalizedSeriesDetailsResponse> {
+    const details = await fetchHardcoverSeriesDetails(input.slug, {
+      limit: input.limit,
+      offset: input.offset,
+    });
+
+    return {
+      success: true,
+      provider: "hardcover",
+      scrapedURL: details.scrapedURL,
+      series: {
+        ...details.series,
+        provider: "hardcover",
+      },
+      books: details.books,
+      pagination: details.pagination,
     };
   },
 };

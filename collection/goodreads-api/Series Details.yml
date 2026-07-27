@@ -1,0 +1,30 @@
+info:
+  name: Series Details
+  type: http
+  seq: 5
+
+http:
+  method: GET
+  url: "{{url}}/api/series/:slug?provider=hardcover"
+  params:
+    - name: provider
+      value: hardcover
+      type: query
+    - name: limit
+      value: "50"
+      type: query
+      disabled: true
+    - name: offset
+      value: "0"
+      type: query
+      disabled: true
+    - name: slug
+      value: the-empyrean
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

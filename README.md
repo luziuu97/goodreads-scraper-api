@@ -18,6 +18,9 @@ https://gdscraper.bookishnearby.com
 |----------|--------|-------------|
 | `/api/book/search` | GET | Search books by title, author, or ISBN |
 | `/api/book/details/:slug` | GET | Get detailed book metadata by provider id/slug |
+| `/api/book/covers/:slug` | GET | List edition covers with image metadata (resolution, color) |
+| `/api/series/search` | GET | Search series by name |
+| `/api/series/:slug` | GET | Series metadata plus ordered books (paginated) |
 
 Author, user, reviews, lists, and quotes endpoints that depended on Goodreads HTML scraping have been **removed**.
 
@@ -68,6 +71,43 @@ fetch(
 fetch(`https://gdscraper.bookishnearby.com/api/book/details/${encodeURIComponent(bookIdOrSlug)}`)
   .then((response) => response.json())
   .then((data) => console.log(data));
+```
+
+### Get edition covers for a book
+
+```javascript
+fetch(
+  `https://gdscraper.bookishnearby.com/api/book/covers/${encodeURIComponent(bookIdOrSlug)}?limit=50`
+)
+  .then((response) => response.json())
+  .then((data) => {
+    console.log(data.covers); // all covers with width/height/pixelCount
+    console.log(data.bestByResolution); // highest-resolution cover when dimensions are known
+  });
+```
+
+### Search series
+
+```javascript
+fetch(
+  `https://gdscraper.bookishnearby.com/api/series/search?query=${encodeURIComponent("The Empyrean")}&limit=10`
+)
+  .then((response) => response.json())
+  .then((data) => console.log(data.results.series));
+```
+
+### Get series details (ordered books)
+
+```javascript
+fetch(
+  `https://gdscraper.bookishnearby.com/api/series/${encodeURIComponent("the-empyrean")}?limit=50&offset=0`
+)
+  .then((response) => response.json())
+  .then((data) => {
+    console.log(data.series);
+    console.log(data.books); // ordered by series position
+    console.log(data.pagination);
+  });
 ```
 
 ## Response shape (search)
@@ -134,6 +174,9 @@ Successful provider responses are cached aggressively:
 | Search with ≥1 result | Yes | ~1 day |
 | Empty search | No | — |
 | Successful book details | Yes | ~14 days |
+| Successful book covers | Yes | ~30 days |
+| Series search with ≥1 result | Yes | ~1 day |
+| Successful series details | Yes | ~14 days |
 | Errors / 4xx / 5xx | No | — |
 
 Cache keys are normalized (sorted params, lowercased query/provider) so equivalent requests share one entry. Set `DISABLE_REDIS=true` to turn caching off at runtime.

@@ -1,13 +1,28 @@
 import {
+  getBookCoversApiParameters,
+  getBookCoversApiResponse,
+  getBookCoversCodeSnippets,
+} from "@/data/api-endpoint/get-book-covers";
+import {
   getBookDetailsApiParameters,
   getBookDetailsApiResponse,
   getBookDetailsCodeSnippets,
 } from "@/data/api-endpoint/get-book-details";
 import {
+  getSeriesDetailsApiParameters,
+  getSeriesDetailsApiResponse,
+  getSeriesDetailsCodeSnippets,
+} from "@/data/api-endpoint/get-series-details";
+import {
   searchBooksApiParameters,
   searchBooksApiResponse,
   searchBooksCodeSnippets,
 } from "@/data/api-endpoint/search-books";
+import {
+  searchSeriesApiParameters,
+  searchSeriesApiResponse,
+  searchSeriesCodeSnippets,
+} from "@/data/api-endpoint/search-series";
 
 export interface Parameter {
   name: string;
@@ -37,7 +52,12 @@ export interface Endpoint {
   codeSnippets: CodeSnippets;
 }
 
-export type ApiEndPointID = "get_book_details" | "search_books";
+export type ApiEndPointID =
+  | "get_book_details"
+  | "get_book_covers"
+  | "search_books"
+  | "search_series"
+  | "get_series_details";
 
 export const endpoints: Endpoint[] = [
   {
@@ -53,6 +73,18 @@ export const endpoints: Endpoint[] = [
     codeSnippets: getBookDetailsCodeSnippets,
   },
   {
+    id: "get-book-covers",
+    name: "Get Book Covers",
+    description:
+      "List edition covers for a book with image metadata (width, height, color) so clients can pick the best resolution.",
+    method: "GET",
+    url: "/api/book/covers/:slug",
+    route: "/api/book/covers",
+    parameters: getBookCoversApiParameters,
+    exampleResponse: getBookCoversApiResponse,
+    codeSnippets: getBookCoversCodeSnippets,
+  },
+  {
     id: "search-books",
     name: "Search Books",
     description:
@@ -63,5 +95,29 @@ export const endpoints: Endpoint[] = [
     parameters: searchBooksApiParameters,
     exampleResponse: searchBooksApiResponse,
     codeSnippets: searchBooksCodeSnippets,
+  },
+  {
+    id: "search-series",
+    name: "Search Series",
+    description:
+      "Search for book series by name. Returns series-shaped results (not books).",
+    method: "GET",
+    url: "/api/series/search",
+    route: "/api/series/search",
+    parameters: searchSeriesApiParameters,
+    exampleResponse: searchSeriesApiResponse,
+    codeSnippets: searchSeriesCodeSnippets,
+  },
+  {
+    id: "get-series-details",
+    name: "Get Series Details",
+    description:
+      "Retrieve a series and its ordered books (paginated with limit/offset).",
+    method: "GET",
+    url: "/api/series/:slug",
+    route: "/api/series",
+    parameters: getSeriesDetailsApiParameters,
+    exampleResponse: getSeriesDetailsApiResponse,
+    codeSnippets: getSeriesDetailsCodeSnippets,
   },
 ];

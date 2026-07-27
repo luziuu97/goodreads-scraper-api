@@ -103,6 +103,194 @@ Successful details responses are cached for about **14 days**.
 
 ---
 
+## 3. Book Covers
+
+List edition covers for a book, including image metadata from Hardcover (width, height, ratio, dominant color) so clients can show a gallery and pick the best resolution.
+
+- **Endpoint**: `GET /api/book/covers/:slug`
+- **Path**:
+  - `slug`: Hardcover numeric id or slug
+- **Query parameters**:
+  - `provider` (optional): `aggregate` (default) \| `hardcover`
+  - `limit` (optional): 1–100 (default 50) — max editions to fetch
+  - `onlyWithCover` (optional): `true` (default) \| `false` — omit editions without a cover URL
+
+### Example
+
+```
+GET /api/book/covers/1662524
+GET /api/book/covers/fourth-wing?provider=hardcover&limit=50
+GET /api/book/covers/1662524?onlyWithCover=false
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "provider": "aggregate",
+  "scrapedURL": "https://hardcover.app/books/fourth-wing",
+  "book": {
+    "id": "1662524",
+    "slug": "fourth-wing",
+    "title": "Fourth Wing",
+    "provider": "hardcover"
+  },
+  "covers": [
+    {
+      "editionId": 32963227,
+      "title": "Fourth Wing",
+      "url": "https://...",
+      "width": 1200,
+      "height": 1800,
+      "ratio": 0.6667,
+      "color": "#2a1f3d",
+      "pixelCount": 2160000,
+      "imageId": 98765,
+      "format": "Hardcover",
+      "isbn": "9781649374042",
+      "isbn10": "1649374046",
+      "asin": null,
+      "publicationDate": "2023-05-02",
+      "pages": 517,
+      "publisher": "Red Tower Books",
+      "language": "English",
+      "languageCode": "en",
+      "isDefault": true
+    }
+  ],
+  "bestByResolution": {
+    "editionId": 32963227,
+    "url": "https://...",
+    "width": 1200,
+    "height": 1800,
+    "pixelCount": 2160000
+  },
+  "totalCovers": 1,
+  "totalEditions": 24
+}
+```
+
+Covers are sorted by `pixelCount` descending (unknown dimensions last). On ties, the default cover edition is preferred. Successful responses are cached for about **30 days**.
+
+---
+
+## 4. Search Series
+
+Search for book series by name. Returns **series-shaped** results (not books).
+
+- **Endpoint**: `GET /api/series/search`
+- **Query parameters**:
+  - `query` (required): Series name search string
+  - `limit` (optional): 1–50 (default 10)
+  - `provider` (optional): `aggregate` (default) \| `hardcover`
+
+### Example
+
+```
+GET /api/series/search?query=The+Empyrean
+GET /api/series/search?query=Empyrean&provider=hardcover&limit=10
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "provider": "aggregate",
+  "results": {
+    "query": "The Empyrean",
+    "totalResults": 1,
+    "series": [
+      {
+        "id": "41764",
+        "provider": "hardcover",
+        "name": "The Empyrean",
+        "slug": "the-empyrean",
+        "author": "Rebecca Yarros",
+        "booksCount": 12,
+        "primaryBooksCount": 3,
+        "readersCount": 120000,
+        "sampleBooks": ["Fourth Wing", "Iron Flame"]
+      }
+    ]
+  }
+}
+```
+
+Empty series search results are not cached. Successful non-empty results are cached for about **1 day**.
+
+---
+
+## 5. Series Details
+
+Retrieve series metadata and its ordered books. Use `limit` / `offset` to page through long series lists.
+
+- **Endpoint**: `GET /api/series/:slug`
+- **Path**:
+  - `slug`: Hardcover numeric id or slug
+- **Query parameters**:
+  - `provider` (optional): `aggregate` (default) \| `hardcover`
+  - `limit` (optional): 1–100 (default 50)
+  - `offset` (optional): non-negative integer (default 0)
+
+### Example
+
+```
+GET /api/series/the-empyrean
+GET /api/series/41764?provider=hardcover&limit=50&offset=0
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "provider": "aggregate",
+  "scrapedURL": "https://hardcover.app/series/the-empyrean",
+  "series": {
+    "id": "41764",
+    "slug": "the-empyrean",
+    "name": "The Empyrean",
+    "description": null,
+    "booksCount": 12,
+    "primaryBooksCount": 3,
+    "isCompleted": false,
+    "author": {
+      "id": 252677,
+      "name": "Rebecca Yarros",
+      "url": "https://hardcover.app/authors/rebecca-yarros"
+    },
+    "provider": "hardcover"
+  },
+  "books": [
+    {
+      "id": "714600",
+      "slug": "fourth-wing",
+      "title": "Fourth Wing",
+      "author": "Rebecca Yarros",
+      "cover": "https://...",
+      "rating": 4.58,
+      "publicationDate": "2023-05-02",
+      "position": 1,
+      "positionLabel": "1",
+      "featured": true,
+      "compilation": false
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "returned": 12,
+    "total": 12
+  }
+}
+```
+
+Successful series details responses are cached for about **14 days**.
+
+---
+
 ## Removed endpoints
 
 The following Goodreads HTML-backed endpoints have been **removed** (HTTP 404):
