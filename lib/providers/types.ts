@@ -158,6 +158,12 @@ export type NormalizedSeriesBook = {
   positionLabel: string | null;
   featured: boolean;
   compilation: boolean;
+  /** ISO 639-1 code when known (e.g. en, es). */
+  languageCode: string | null;
+  language: string | null;
+  /** Normalized format label: ebook | audiobook | physical | null. */
+  format: string | null;
+  formatLabel: string | null;
 };
 
 export type NormalizedSeriesDetailsResponse = {
@@ -176,6 +182,18 @@ export type NormalizedSeriesDetailsResponse = {
     provider: ProviderId;
   };
   books: NormalizedSeriesBook[];
+  filters: {
+    /** Requested language param (original when omitted). */
+    language: string;
+    /** Resolved language code used for filtering (e.g. en). */
+    resolvedLanguage: string | null;
+    /** Inferred original/majority language for the series. */
+    originalLanguage: string | null;
+    /** Requested format filter, or null when unrestricted. */
+    format: string | null;
+    /** One entry kept per series position after language/format scoring. */
+    dedupedByPosition: boolean;
+  };
   pagination: {
     limit: number;
     offset: number;
@@ -195,6 +213,15 @@ export type SeriesDetailsInput = {
   limit: number;
   /** Offset into ordered series books. */
   offset: number;
+  /**
+   * ISO language code (e.g. en, es) or "original".
+   * Default / original = majority language among featured primary books.
+   */
+  language?: string;
+  /**
+   * Optional format filter: ebook | audiobook | physical.
+   */
+  format?: string;
 };
 
 /**

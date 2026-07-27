@@ -1069,6 +1069,10 @@ export type HardcoverNormalizedSeriesBook = {
   positionLabel: string | null;
   featured: boolean;
   compilation: boolean;
+  languageCode: string | null;
+  language: string | null;
+  format: string | null;
+  formatLabel: string | null;
 };
 
 export type HardcoverNormalizedSeriesDetails = {
@@ -1084,12 +1088,34 @@ export type HardcoverNormalizedSeriesDetails = {
     author: { id: number; name: string; url: string } | null;
   };
   books: HardcoverNormalizedSeriesBook[];
+  filters: {
+    language: string;
+    resolvedLanguage: string | null;
+    originalLanguage: string | null;
+    format: string | null;
+    dedupedByPosition: boolean;
+  };
   pagination: {
     limit: number;
     offset: number;
     returned: number;
     total: number;
   };
+};
+
+type HardcoverEditionLangFormat = {
+  id?: number | null;
+  title?: string | null;
+  edition_format?: string | null;
+  language?: {
+    code2?: string | null;
+    language?: string | null;
+  } | null;
+  reading_format?: {
+    id?: number | null;
+    format?: string | null;
+  } | null;
+  image?: HardcoverImage;
 };
 
 type HardcoverSeriesDetailsRow = {
@@ -1125,12 +1151,523 @@ type HardcoverSeriesDetailsRow = {
         } | null;
       }> | null;
       image?: HardcoverImage;
-      default_cover_edition?: {
-        image?: HardcoverImage;
-      } | null;
+      default_cover_edition?: HardcoverEditionLangFormat | null;
+      default_physical_edition?: HardcoverEditionLangFormat | null;
+      default_ebook_edition?: HardcoverEditionLangFormat | null;
+      default_audio_edition?: HardcoverEditionLangFormat | null;
+      editions?: HardcoverEditionLangFormat[] | null;
     } | null;
   }> | null;
 };
+
+/** Max series membership rows to pull before language/format filtering. */
+const SERIES_BOOKS_FETCH_CAP = 200;
+
+type SeriesFormatFilter = "ebook" | "audiobook" | "physical";
+
+function normalizeLanguageParam(value: string | undefined | null): string {
+  const raw = (value ?? "original").trim().toLowerCase();
+  if (!raw || raw === "original" || raw === "default" || raw === "auto") {
+    return "original";
+  }
+  // Accept en, es, eng, spa-ish short codes; keep first token of "es-ES"
+  const code = raw.split(/[-_]/)[0] || raw;
+  if (!/^[a-z]{2,3}$/.test(code)) {
+    throw new Error(
+      "Invalid language parameter. Use an ISO code like en or es, or original"
+    );
+  }
+  return code;
+}
+
+function normalizeFormatParam(
+  value: string | undefined | null
+): SeriesFormatFilter | null {
+  if (value === undefined || value === null || value.trim() === "") {
+    return null;
+  }
+
+  const raw = value.trim().toLowerCase();
+  if (["any", "all", "*"].includes(raw)) {
+    return null;
+  }
+  if (["ebook", "e-book", "e_book", "kindle", "digital"].includes(raw)) {
+    return "ebook";
+  }
+  if (["audiobook", "audio", "audible", "listened"].includes(raw)) {
+    return "audiobook";
+  }
+  if (
+    ["physical", "print", "hardcover", "paperback", "book", "read"].includes(raw)
+  ) {
+    return "physical";
+  }
+
+  throw new Error(
+    "Invalid format parameter. Valid options: ebook, audiobook, physical"
+  );
+}
+
+function normalizeFormatLabel(
+  editionFormat: string | null | undefined,
+  readingFormat: string | null | undefined
+): SeriesFormatFilter | null {
+  const combined = `${editionFormat || ""} ${readingFormat || ""}`.toLowerCase();
+  if (!combined.trim()) {
+    return null;
+  }
+  if (
+    combined.includes("ebook") ||
+    combined.includes("e-book") ||
+    combined.includes("kindle") ||
+    readingFormat?.toLowerCase() === "ebook"
+  ) {
+    return "ebook";
+  }
+  if (
+    combined.includes("audio") ||
+    combined.includes("audible") ||
+    readingFormat?.toLowerCase() === "listened"
+  ) {
+    return "audiobook";
+  }
+  if (
+    combined.includes("hardcover") ||
+    combined.includes("paperback") ||
+    combined.includes("library") ||
+    combined.includes("mass market") ||
+    readingFormat?.toLowerCase() === "read" ||
+    combined.includes("print")
+  ) {
+    return "physical";
+  }
+  return null;
+}
+
+function collectEditionLanguage(
+  edition: HardcoverEditionLangFormat | null | undefined
+): { code: string; name: string } | null {
+  const code = edition?.language?.code2?.trim().toLowerCase();
+  if (!code) {
+    return null;
+  }
+  return {
+    code,
+    name: edition?.language?.language?.trim() || code,
+  };
+}
+
+type SeriesBookCandidate = {
+  entryPosition: number | null;
+  positionLabel: string | null;
+  featured: boolean;
+  compilation: boolean;
+  id: string;
+  slug: string;
+  title: string;
+  author: string;
+  cover: string;
+  rating?: number;
+  publicationDate: string | null;
+  primaryLanguageCode: string | null;
+  primaryLanguageName: string | null;
+  availableLanguageCodes: Set<string>;
+  languageEditions: Map<
+    string,
+    Array<{
+      title: string | null;
+      cover: string;
+      format: SeriesFormatFilter | null;
+      formatLabel: string | null;
+      languageCode: string;
+      languageName: string;
+    }>
+  >;
+  hasEbook: boolean;
+  hasAudiobook: boolean;
+  hasPhysical: boolean;
+  defaultFormat: SeriesFormatFilter | null;
+  defaultFormatLabel: string | null;
+  ebookPresentation: {
+    title: string | null;
+    cover: string;
+    formatLabel: string | null;
+    languageCode: string | null;
+    languageName: string | null;
+  } | null;
+  audiobookPresentation: {
+    title: string | null;
+    cover: string;
+    formatLabel: string | null;
+    languageCode: string | null;
+    languageName: string | null;
+  } | null;
+  physicalPresentation: {
+    title: string | null;
+    cover: string;
+    formatLabel: string | null;
+    languageCode: string | null;
+    languageName: string | null;
+  } | null;
+};
+
+function buildSeriesBookCandidate(
+  entry: NonNullable<HardcoverSeriesDetailsRow["book_series"]>[number],
+  fallbackAuthor: string
+): SeriesBookCandidate | null {
+  const book = entry.book;
+  const title = typeof book?.title === "string" ? book.title.trim() : "";
+  if (!title) {
+    return null;
+  }
+
+  const authors =
+    book?.contributions
+      ?.map((contribution) => contribution.author?.name?.trim() || "")
+      .filter(Boolean) || [];
+
+  const id =
+    typeof book?.id === "number"
+      ? String(book.id)
+      : typeof book?.slug === "string" && book.slug
+        ? book.slug
+        : title;
+
+  const baseCover =
+    toCoverUrl(book?.image || null) ||
+    toCoverUrl(book?.default_cover_edition?.image || null) ||
+    toCoverUrl(book?.default_physical_edition?.image || null) ||
+    toCoverUrl(book?.default_ebook_edition?.image || null) ||
+    "";
+
+  const languageEditions = new Map<
+    string,
+    Array<{
+      title: string | null;
+      cover: string;
+      format: SeriesFormatFilter | null;
+      formatLabel: string | null;
+      languageCode: string;
+      languageName: string;
+    }>
+  >();
+  const availableLanguageCodes = new Set<string>();
+
+  const considerEdition = (edition: HardcoverEditionLangFormat | null | undefined) => {
+    const lang = collectEditionLanguage(edition);
+    if (!lang) {
+      return;
+    }
+    availableLanguageCodes.add(lang.code);
+    const formatLabel =
+      trimToNull(edition?.edition_format) ||
+      trimToNull(edition?.reading_format?.format);
+    const format = normalizeFormatLabel(
+      edition?.edition_format,
+      edition?.reading_format?.format
+    );
+    const list = languageEditions.get(lang.code) || [];
+    list.push({
+      title: trimToNull(edition?.title),
+      cover: toCoverUrl(edition?.image || null),
+      format,
+      formatLabel,
+      languageCode: lang.code,
+      languageName: lang.name,
+    });
+    languageEditions.set(lang.code, list);
+  };
+
+  considerEdition(book?.default_cover_edition);
+  considerEdition(book?.default_physical_edition);
+  considerEdition(book?.default_ebook_edition);
+  considerEdition(book?.default_audio_edition);
+  for (const edition of book?.editions || []) {
+    considerEdition(edition);
+  }
+
+  // Primary language preference: cover → physical → ebook → audio → first known
+  const primary =
+    collectEditionLanguage(book?.default_cover_edition) ||
+    collectEditionLanguage(book?.default_physical_edition) ||
+    collectEditionLanguage(book?.default_ebook_edition) ||
+    collectEditionLanguage(book?.default_audio_edition) ||
+    null;
+
+  const hasEbook = Boolean(
+    book?.default_ebook_edition?.id ||
+      [...(book?.editions || [])].some(
+        (edition) =>
+          normalizeFormatLabel(edition.edition_format, edition.reading_format?.format) ===
+          "ebook"
+      )
+  );
+  const hasAudiobook = Boolean(
+    book?.default_audio_edition?.id ||
+      [...(book?.editions || [])].some(
+        (edition) =>
+          normalizeFormatLabel(edition.edition_format, edition.reading_format?.format) ===
+          "audiobook"
+      )
+  );
+  const hasPhysical = Boolean(
+    book?.default_physical_edition?.id ||
+      [...(book?.editions || [])].some(
+        (edition) =>
+          normalizeFormatLabel(edition.edition_format, edition.reading_format?.format) ===
+          "physical"
+      )
+  );
+
+  const defaultFormat =
+    normalizeFormatLabel(
+      book?.default_cover_edition?.edition_format,
+      book?.default_cover_edition?.reading_format?.format
+    ) ||
+    (hasPhysical ? "physical" : null) ||
+    (hasEbook ? "ebook" : null) ||
+    (hasAudiobook ? "audiobook" : null);
+
+  const defaultFormatLabel =
+    trimToNull(book?.default_cover_edition?.edition_format) ||
+    trimToNull(book?.default_cover_edition?.reading_format?.format) ||
+    trimToNull(book?.default_physical_edition?.edition_format) ||
+    trimToNull(book?.default_ebook_edition?.edition_format) ||
+    null;
+
+  const presentationFromEdition = (
+    edition: HardcoverEditionLangFormat | null | undefined
+  ) => {
+    if (!edition) {
+      return null;
+    }
+    const lang = collectEditionLanguage(edition);
+    return {
+      title: trimToNull(edition.title),
+      cover: toCoverUrl(edition.image || null),
+      formatLabel:
+        trimToNull(edition.edition_format) ||
+        trimToNull(edition.reading_format?.format),
+      languageCode: lang?.code ?? null,
+      languageName: lang?.name ?? null,
+    };
+  };
+
+  return {
+    entryPosition:
+      typeof entry.position === "number" && Number.isFinite(entry.position)
+        ? entry.position
+        : null,
+    positionLabel: trimToNull(entry.details),
+    featured: Boolean(entry.featured),
+    compilation: Boolean(entry.compilation),
+    id,
+    slug: typeof book?.slug === "string" ? book.slug : id,
+    title,
+    author: authors.join(", ") || fallbackAuthor,
+    cover: baseCover,
+    rating: toNumber(book?.rating),
+    publicationDate: trimToNull(book?.release_date),
+    primaryLanguageCode: primary?.code ?? null,
+    primaryLanguageName: primary?.name ?? null,
+    availableLanguageCodes,
+    languageEditions,
+    hasEbook,
+    hasAudiobook,
+    hasPhysical,
+    defaultFormat,
+    defaultFormatLabel,
+    ebookPresentation: presentationFromEdition(book?.default_ebook_edition),
+    audiobookPresentation: presentationFromEdition(book?.default_audio_edition),
+    physicalPresentation: presentationFromEdition(book?.default_physical_edition),
+  };
+}
+
+function inferOriginalLanguage(candidates: SeriesBookCandidate[]): string | null {
+  const counts = new Map<string, number>();
+
+  for (const candidate of candidates) {
+    if (candidate.compilation) {
+      continue;
+    }
+    const code = candidate.primaryLanguageCode;
+    if (!code) {
+      continue;
+    }
+    // Weight featured books more heavily when inferring the series original language.
+    const weight = candidate.featured ? 3 : 1;
+    counts.set(code, (counts.get(code) || 0) + weight);
+  }
+
+  let best: string | null = null;
+  let bestScore = -1;
+  for (const [code, score] of counts) {
+    if (score > bestScore) {
+      best = code;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function pickEditionForFilters(
+  candidate: SeriesBookCandidate,
+  languageCode: string | null,
+  format: SeriesFormatFilter | null
+): {
+  title: string;
+  cover: string;
+  languageCode: string | null;
+  languageName: string | null;
+  format: SeriesFormatFilter | null;
+  formatLabel: string | null;
+} {
+  const languageEditions = languageCode
+    ? candidate.languageEditions.get(languageCode) || []
+    : [];
+
+  if (languageCode && languageEditions.length > 0) {
+    const formatMatch = format
+      ? languageEditions.find((edition) => edition.format === format)
+      : undefined;
+    const chosen = formatMatch || languageEditions[0];
+    if (chosen) {
+      // If a specific format was requested but the language edition is a different
+      // format, still prefer default_* presentation for that format when present.
+      if (format && chosen.format !== format) {
+        const formatDefault =
+          format === "ebook"
+            ? candidate.ebookPresentation
+            : format === "audiobook"
+              ? candidate.audiobookPresentation
+              : candidate.physicalPresentation;
+        if (formatDefault) {
+          return {
+            title: formatDefault.title || chosen.title || candidate.title,
+            cover: formatDefault.cover || chosen.cover || candidate.cover,
+            languageCode: formatDefault.languageCode || chosen.languageCode,
+            languageName: formatDefault.languageName || chosen.languageName,
+            format,
+            formatLabel: formatDefault.formatLabel || chosen.formatLabel,
+          };
+        }
+      }
+
+      return {
+        title: chosen.title || candidate.title,
+        cover: chosen.cover || candidate.cover,
+        languageCode: chosen.languageCode,
+        languageName: chosen.languageName,
+        format: chosen.format || format || candidate.defaultFormat,
+        formatLabel: chosen.formatLabel || candidate.defaultFormatLabel,
+      };
+    }
+  }
+
+  // Format-first defaults when language-specific editions are missing.
+  if (format === "ebook" && candidate.ebookPresentation) {
+    return {
+      title: candidate.ebookPresentation.title || candidate.title,
+      cover: candidate.ebookPresentation.cover || candidate.cover,
+      languageCode:
+        candidate.ebookPresentation.languageCode || candidate.primaryLanguageCode,
+      languageName:
+        candidate.ebookPresentation.languageName || candidate.primaryLanguageName,
+      format: "ebook",
+      formatLabel: candidate.ebookPresentation.formatLabel,
+    };
+  }
+  if (format === "audiobook" && candidate.audiobookPresentation) {
+    return {
+      title: candidate.audiobookPresentation.title || candidate.title,
+      cover: candidate.audiobookPresentation.cover || candidate.cover,
+      languageCode:
+        candidate.audiobookPresentation.languageCode ||
+        candidate.primaryLanguageCode,
+      languageName:
+        candidate.audiobookPresentation.languageName ||
+        candidate.primaryLanguageName,
+      format: "audiobook",
+      formatLabel: candidate.audiobookPresentation.formatLabel,
+    };
+  }
+  if (format === "physical" && candidate.physicalPresentation) {
+    return {
+      title: candidate.physicalPresentation.title || candidate.title,
+      cover: candidate.physicalPresentation.cover || candidate.cover,
+      languageCode:
+        candidate.physicalPresentation.languageCode ||
+        candidate.primaryLanguageCode,
+      languageName:
+        candidate.physicalPresentation.languageName ||
+        candidate.primaryLanguageName,
+      format: "physical",
+      formatLabel: candidate.physicalPresentation.formatLabel,
+    };
+  }
+
+  let resolvedFormat = candidate.defaultFormat;
+  if (format === "ebook" && candidate.hasEbook) {
+    resolvedFormat = "ebook";
+  } else if (format === "audiobook" && candidate.hasAudiobook) {
+    resolvedFormat = "audiobook";
+  } else if (format === "physical" && candidate.hasPhysical) {
+    resolvedFormat = "physical";
+  }
+
+  return {
+    title: candidate.title,
+    cover: candidate.cover,
+    languageCode: candidate.primaryLanguageCode,
+    languageName: candidate.primaryLanguageName,
+    format: resolvedFormat,
+    formatLabel: candidate.defaultFormatLabel,
+  };
+}
+
+function scoreSeriesCandidate(
+  candidate: SeriesBookCandidate,
+  languageCode: string | null,
+  format: SeriesFormatFilter | null
+): number {
+  let score = 0;
+
+  if (candidate.featured) score += 50;
+  if (!candidate.compilation) score += 40;
+  if (candidate.cover) score += 5;
+
+  if (languageCode) {
+    if (candidate.primaryLanguageCode === languageCode) {
+      score += 200;
+    } else if (candidate.availableLanguageCodes.has(languageCode)) {
+      score += 120;
+    } else if (candidate.primaryLanguageCode) {
+      // Known different language — strongly deprioritize
+      score -= 500;
+    } else {
+      // Unknown language metadata: only keep as weak fallback
+      score -= 20;
+    }
+  }
+
+  if (format === "ebook") {
+    if (candidate.hasEbook) score += 80;
+    else score -= 300;
+  } else if (format === "audiobook") {
+    if (candidate.hasAudiobook) score += 80;
+    else score -= 300;
+  } else if (format === "physical") {
+    if (candidate.hasPhysical) score += 80;
+    else score -= 100;
+  }
+
+  return score;
+}
+
+function positionSortKey(position: number | null): number {
+  return position === null || Number.isNaN(position) ? Number.POSITIVE_INFINITY : position;
+}
 
 export async function searchHardcoverSeries(input: {
   query: string;
@@ -1217,11 +1754,35 @@ export async function searchHardcoverSeries(input: {
 
 export async function fetchHardcoverSeriesDetails(
   slugOrId: string,
-  options: { limit?: number; offset?: number } = {}
+  options: {
+    limit?: number;
+    offset?: number;
+    language?: string;
+    format?: string;
+  } = {}
 ): Promise<HardcoverNormalizedSeriesDetails> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
   const offset = Math.max(options.offset ?? 0, 0);
+  const languageParam = normalizeLanguageParam(options.language);
+  const formatFilter = normalizeFormatParam(options.format);
   const numericId = /^\d+$/.test(slugOrId) ? Number(slugOrId) : null;
+
+  const editionFields = `
+    id
+    title
+    edition_format
+    language {
+      code2
+      language
+    }
+    reading_format {
+      id
+      format
+    }
+    image {
+      url
+    }
+  `;
 
   const seriesSelection = `
     id
@@ -1236,7 +1797,10 @@ export async function fetchHardcoverSeriesDetails(
       name
       slug
     }
-    book_series(limit: $limit, offset: $offset, order_by: { position: asc }) {
+    book_series(
+      limit: $fetchLimit
+      order_by: [{ position: asc }, { featured: desc }]
+    ) {
       id
       position
       details
@@ -1259,9 +1823,23 @@ export async function fetchHardcoverSeriesDetails(
           url
         }
         default_cover_edition {
-          image {
-            url
-          }
+          ${editionFields}
+        }
+        default_physical_edition {
+          ${editionFields}
+        }
+        default_ebook_edition {
+          ${editionFields}
+        }
+        default_audio_edition {
+          ${editionFields}
+        }
+        editions(
+          where: { language_id: { _is_null: false } }
+          limit: 12
+          order_by: { users_count: desc }
+        ) {
+          ${editionFields}
         }
       }
     }
@@ -1270,14 +1848,14 @@ export async function fetchHardcoverSeriesDetails(
   const detailsQuery =
     numericId !== null
       ? `
-      query GetSeriesDetailsById($numericId: Int!, $limit: Int!, $offset: Int!) {
+      query GetSeriesDetailsById($numericId: Int!, $fetchLimit: Int!) {
         series(where: { id: { _eq: $numericId } }, limit: 1) {
           ${seriesSelection}
         }
       }
     `
       : `
-      query GetSeriesDetailsBySlug($slug: String!, $limit: Int!, $offset: Int!) {
+      query GetSeriesDetailsBySlug($slug: String!, $fetchLimit: Int!) {
         series(where: { slug: { _eq: $slug } }, limit: 1) {
           ${seriesSelection}
         }
@@ -1287,8 +1865,8 @@ export async function fetchHardcoverSeriesDetails(
   const data = await hardcoverGraphQLRequest<{ series?: HardcoverSeriesDetailsRow[] }>(
     detailsQuery,
     numericId !== null
-      ? { numericId, limit, offset }
-      : { slug: slugOrId, limit, offset }
+      ? { numericId, fetchLimit: SERIES_BOOKS_FETCH_CAP }
+      : { slug: slugOrId, fetchLimit: SERIES_BOOKS_FETCH_CAP }
   );
 
   const series = Array.isArray(data.series) ? data.series[0] : null;
@@ -1313,49 +1891,99 @@ export async function fetchHardcoverSeriesDetails(
       ? series.books_count
       : 0;
 
-  const books: HardcoverNormalizedSeriesBook[] = [];
   const rawEntries = Array.isArray(series.book_series) ? series.book_series : [];
+  const candidates = rawEntries
+    .map((entry) => buildSeriesBookCandidate(entry, authorName))
+    .filter((entry): entry is SeriesBookCandidate => Boolean(entry));
 
-  for (const entry of rawEntries) {
-    const book = entry.book;
-    const title = typeof book?.title === "string" ? book.title.trim() : "";
-    if (!title) {
+  const originalLanguage = inferOriginalLanguage(candidates);
+  const resolvedLanguage =
+    languageParam === "original" ? originalLanguage : languageParam;
+
+  // Group by position and pick the best language/format match per slot.
+  const byPosition = new Map<string, SeriesBookCandidate[]>();
+  for (const candidate of candidates) {
+    const key =
+      candidate.entryPosition === null ? "null" : String(candidate.entryPosition);
+    const list = byPosition.get(key) || [];
+    list.push(candidate);
+    byPosition.set(key, list);
+  }
+
+  const selected: HardcoverNormalizedSeriesBook[] = [];
+
+  for (const [, group] of byPosition) {
+    let best: SeriesBookCandidate | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const candidate of group) {
+      // Hard filter: if a language is resolved, require match or available edition.
+      if (resolvedLanguage) {
+        const matchesPrimary = candidate.primaryLanguageCode === resolvedLanguage;
+        const hasEdition = candidate.availableLanguageCodes.has(resolvedLanguage);
+        if (!matchesPrimary && !hasEdition) {
+          continue;
+        }
+      }
+
+      if (formatFilter === "ebook" && !candidate.hasEbook) {
+        // Still allow if language-specific edition list includes ebook format
+        const langEditions = resolvedLanguage
+          ? candidate.languageEditions.get(resolvedLanguage) || []
+          : [];
+        if (!langEditions.some((edition) => edition.format === "ebook")) {
+          continue;
+        }
+      }
+      if (formatFilter === "audiobook" && !candidate.hasAudiobook) {
+        const langEditions = resolvedLanguage
+          ? candidate.languageEditions.get(resolvedLanguage) || []
+          : [];
+        if (!langEditions.some((edition) => edition.format === "audiobook")) {
+          continue;
+        }
+      }
+
+      const score = scoreSeriesCandidate(candidate, resolvedLanguage, formatFilter);
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+
+    if (!best || bestScore < 0) {
       continue;
     }
 
-    const authors =
-      book?.contributions
-        ?.map((contribution) => contribution.author?.name?.trim() || "")
-        .filter(Boolean) || [];
+    const presentation = pickEditionForFilters(best, resolvedLanguage, formatFilter);
 
-    const id =
-      typeof book?.id === "number"
-        ? String(book.id)
-        : typeof book?.slug === "string" && book.slug
-          ? book.slug
-          : title;
-
-    const cover =
-      toCoverUrl(book?.image || null) ||
-      toCoverUrl(book?.default_cover_edition?.image || null);
-
-    books.push({
-      id,
-      slug: typeof book?.slug === "string" ? book.slug : id,
-      title,
-      author: authors.join(", ") || authorName,
-      cover,
-      rating: toNumber(book?.rating),
-      publicationDate: trimToNull(book?.release_date),
-      position:
-        typeof entry.position === "number" && Number.isFinite(entry.position)
-          ? entry.position
-          : null,
-      positionLabel: trimToNull(entry.details),
-      featured: Boolean(entry.featured),
-      compilation: Boolean(entry.compilation),
+    selected.push({
+      id: best.id,
+      slug: best.slug,
+      title: presentation.title,
+      author: best.author,
+      cover: presentation.cover,
+      rating: best.rating,
+      publicationDate: best.publicationDate,
+      position: best.entryPosition,
+      positionLabel: best.positionLabel,
+      featured: best.featured,
+      compilation: best.compilation,
+      languageCode: presentation.languageCode,
+      language: presentation.languageName,
+      format: presentation.format,
+      formatLabel: presentation.formatLabel,
     });
   }
+
+  selected.sort((a, b) => {
+    const posDiff = positionSortKey(a.position) - positionSortKey(b.position);
+    if (posDiff !== 0) return posDiff;
+    return a.title.localeCompare(b.title);
+  });
+
+  const totalFiltered = selected.length;
+  const page = selected.slice(offset, offset + limit);
 
   return {
     scrapedURL: `https://hardcover.app/series/${series.slug}`,
@@ -1373,12 +2001,19 @@ export async function fetchHardcoverSeriesDetails(
         typeof series.is_completed === "boolean" ? series.is_completed : null,
       author,
     },
-    books,
+    books: page,
+    filters: {
+      language: languageParam,
+      resolvedLanguage,
+      originalLanguage,
+      format: formatFilter,
+      dedupedByPosition: true,
+    },
     pagination: {
       limit,
       offset,
-      returned: books.length,
-      total: booksCount,
+      returned: page.length,
+      total: totalFiltered,
     },
   };
 }

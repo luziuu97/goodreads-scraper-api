@@ -98,16 +98,28 @@ fetch(
 
 ### Get series details (ordered books)
 
+Defaults to **original language**, one book per position (avoids mixed French/Japanese/etc. translations).
+
 ```javascript
+// Original language (default)
 fetch(
-  `https://gdscraper.bookishnearby.com/api/series/${encodeURIComponent("the-empyrean")}?limit=50&offset=0`
+  `https://gdscraper.bookishnearby.com/api/series/${encodeURIComponent("percy-jackson-and-the-olympians")}`
 )
   .then((response) => response.json())
   .then((data) => {
-    console.log(data.series);
-    console.log(data.books); // ordered by series position
-    console.log(data.pagination);
+    console.log(data.filters); // { language: "original", resolvedLanguage: "en", ... }
+    console.log(data.books);   // ordered, deduped by position
   });
+
+// Spanish editions where available
+fetch(
+  `https://gdscraper.bookishnearby.com/api/series/percy-jackson-and-the-olympians?language=es`
+);
+
+// English ebooks
+fetch(
+  `https://gdscraper.bookishnearby.com/api/series/percy-jackson-and-the-olympians?language=en&format=ebook`
+);
 ```
 
 ## Response shape (search)

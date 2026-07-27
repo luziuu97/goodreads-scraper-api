@@ -30,6 +30,22 @@ export const getSeriesDetailsApiParameters: Parameter[] = [
     description: "Offset into the ordered series book list (default: 0)",
     placeholder: "0",
   },
+  {
+    name: "language",
+    type: "string",
+    required: false,
+    description:
+      'ISO language code (en, es, …) or "original" (default). Original picks the series majority/original language and one book per position.',
+    placeholder: "original",
+  },
+  {
+    name: "format",
+    type: "select",
+    required: false,
+    description:
+      "Optional format filter. Prefers matching editions for title/cover when available.",
+    options: ["ebook", "audiobook", "physical"],
+  },
 ];
 
 export const getSeriesDetailsApiResponse = {
@@ -64,6 +80,10 @@ export const getSeriesDetailsApiResponse = {
       positionLabel: "1",
       featured: true,
       compilation: false,
+      languageCode: "en",
+      language: "English",
+      format: "physical",
+      formatLabel: "Hardcover",
     },
     {
       id: "714601",
@@ -77,8 +97,19 @@ export const getSeriesDetailsApiResponse = {
       positionLabel: "2",
       featured: true,
       compilation: false,
+      languageCode: "en",
+      language: "English",
+      format: "ebook",
+      formatLabel: "Ebook",
     },
   ],
+  filters: {
+    language: "original",
+    resolvedLanguage: "en",
+    originalLanguage: "en",
+    format: null,
+    dedupedByPosition: true,
+  },
   pagination: {
     limit: 50,
     offset: 0,

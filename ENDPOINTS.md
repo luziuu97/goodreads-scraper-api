@@ -226,6 +226,8 @@ Empty series search results are not cached. Successful non-empty results are cac
 
 Retrieve series metadata and its ordered books. Use `limit` / `offset` to page through long series lists.
 
+By default, results are **deduped to one book per series position** in the series’ **original language** (inferred from featured primary editions). Use `language` / `format` to refine.
+
 - **Endpoint**: `GET /api/series/:slug`
 - **Path**:
   - `slug`: Hardcover numeric id or slug
@@ -233,11 +235,16 @@ Retrieve series metadata and its ordered books. Use `limit` / `offset` to page t
   - `provider` (optional): `aggregate` (default) \| `hardcover`
   - `limit` (optional): 1–100 (default 50)
   - `offset` (optional): non-negative integer (default 0)
+  - `language` (optional): ISO code (`en`, `es`, …) or `original` (**default**). Original = majority language among featured non-compilation books.
+  - `format` (optional): `ebook` \| `audiobook` \| `physical` — prefer editions of that format (title/cover when available)
 
 ### Example
 
 ```
 GET /api/series/the-empyrean
+GET /api/series/percy-jackson-and-the-olympians
+GET /api/series/percy-jackson-and-the-olympians?language=es
+GET /api/series/percy-jackson-and-the-olympians?language=en&format=ebook
 GET /api/series/41764?provider=hardcover&limit=50&offset=0
 ```
 
@@ -275,9 +282,20 @@ GET /api/series/41764?provider=hardcover&limit=50&offset=0
       "position": 1,
       "positionLabel": "1",
       "featured": true,
-      "compilation": false
+      "compilation": false,
+      "languageCode": "en",
+      "language": "English",
+      "format": "physical",
+      "formatLabel": "Hardcover"
     }
   ],
+  "filters": {
+    "language": "original",
+    "resolvedLanguage": "en",
+    "originalLanguage": "en",
+    "format": null,
+    "dedupedByPosition": true
+  },
   "pagination": {
     "limit": 50,
     "offset": 0,
@@ -287,7 +305,9 @@ GET /api/series/41764?provider=hardcover&limit=50&offset=0
 }
 ```
 
-Successful series details responses are cached for about **14 days**.
+When `language=es`, titles/covers prefer Spanish editions when Hardcover has them (even if the work id is the English book). Compilations and alternate-language translations at the same position are filtered out under the default original-language mode.
+
+Successful series details responses are cached for about **14 days** (cache key includes language/format).
 
 ---
 

@@ -185,6 +185,8 @@ export function ApiContent({ endpoint }: ApiContentProps) {
         if (params.provider) queryParams.set("provider", params.provider);
         if (params.limit) queryParams.set("limit", params.limit);
         if (params.offset) queryParams.set("offset", params.offset);
+        if (params.language) queryParams.set("language", params.language);
+        if (params.format) queryParams.set("format", params.format);
         const queryString = queryParams.toString();
         const requestUrl = queryString
           ? `/api/series/${encodeURIComponent(slug)}?${queryString}`

@@ -106,12 +106,20 @@ export async function getSeriesDetailsByProvider(input: {
   slug: string;
   limit: number;
   offset: number;
+  language?: string;
+  format?: string;
 }): Promise<NormalizedSeriesDetailsResponse> {
-  const { provider, slug, limit, offset } = input;
+  const { provider, slug, limit, offset, language, format } = input;
 
   if (provider === "aggregate") {
-    return getSeriesDetailsAggregate({ slug, limit, offset });
+    return getSeriesDetailsAggregate({ slug, limit, offset, language, format });
   }
 
-  return getSeriesDetailsByProviderId(provider, { slug, limit, offset });
+  return getSeriesDetailsByProviderId(provider, {
+    slug,
+    limit,
+    offset,
+    language,
+    format,
+  });
 }

@@ -102,6 +102,8 @@ export const hardcoverProvider: BookDataProvider = {
     const details = await fetchHardcoverSeriesDetails(input.slug, {
       limit: input.limit,
       offset: input.offset,
+      language: input.language,
+      format: input.format,
     });
 
     return {
@@ -113,6 +115,7 @@ export const hardcoverProvider: BookDataProvider = {
         provider: "hardcover",
       },
       books: details.books,
+      filters: details.filters,
       pagination: details.pagination,
     };
   },

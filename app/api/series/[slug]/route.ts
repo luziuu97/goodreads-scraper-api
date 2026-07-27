@@ -69,11 +69,16 @@ export async function GET(
       );
     }
 
+    const language = req.nextUrl.searchParams.get("language") || "original";
+    const format = req.nextUrl.searchParams.get("format") || undefined;
+
     const cacheKey = buildLogicalCacheKey("get_series_details", {
       provider,
       slug: decodedSlug,
       limit,
       offset,
+      language,
+      format: format || "",
     });
     const cachedData = await getCachedResponse(cacheKey);
 
@@ -92,6 +97,8 @@ export async function GET(
       slug: decodedSlug,
       limit,
       offset,
+      language,
+      format,
     });
 
     const apiResponse = NextResponse.json(responseBody);
@@ -110,6 +117,8 @@ export async function GET(
       message.includes("Invalid provider parameter") ||
       message.includes("Invalid limit parameter") ||
       message.includes("Invalid offset parameter") ||
+      message.includes("Invalid language parameter") ||
+      message.includes("Invalid format parameter") ||
       message.includes("Goodreads HTML provider has been removed")
         ? 400
         : message.includes("HARDCOVER_API_TOKEN") ||

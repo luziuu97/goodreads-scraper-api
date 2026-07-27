@@ -18,8 +18,15 @@ http:
       value: "0"
       type: query
       disabled: true
+    - name: language
+      value: original
+      type: query
+    - name: format
+      value: ebook
+      type: query
+      disabled: true
     - name: slug
-      value: the-empyrean
+      value: percy-jackson-and-the-olympians
       type: path
   auth: inherit
 
