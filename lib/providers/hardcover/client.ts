@@ -67,6 +67,7 @@ type HardcoverDetailsBook = {
   slug: string;
   title: string;
   subtitle?: string | null;
+  headline?: string | null;
   description?: string | null;
   rating?: number | null;
   ratings_count?: number | null;
@@ -257,6 +258,21 @@ function toStringArray(value: unknown): string[] {
 
 function trimToNull(value: string | null | undefined): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatBookDescription(
+  headline: string | null | undefined,
+  description: string | null | undefined
+): string {
+  const normalizedHeadline = trimToNull(headline);
+  const normalizedDescription = trimToNull(description);
+
+  return [
+    normalizedHeadline ? `**${normalizedHeadline}**` : null,
+    normalizedDescription,
+  ]
+    .filter((part): part is string => part !== null)
+    .join("\n\n");
 }
 
 function toCoverUrl(image: HardcoverImage | HardcoverDetailsBook["image"]): string {
@@ -645,6 +661,7 @@ export async function fetchHardcoverBookDetails(
     slug
     title
     subtitle
+    headline
     description
     rating
     ratings_count
@@ -764,7 +781,7 @@ export async function fetchHardcoverBookDetails(
         typeof book.ratings_count === "number" ? String(book.ratings_count) : "",
       reviewsCount:
         typeof book.reviews_count === "number" ? String(book.reviews_count) : "",
-      description: typeof book.description === "string" ? book.description : "",
+      description: formatBookDescription(book.headline, book.description),
       genres: getEditionGenres(book.cached_tags ?? null) || [],
       bookEdition: trimToNull(edition?.edition_format),
       publishDate:
