@@ -16,7 +16,14 @@ export type BookMetadataSource = {
 export type NormalizedSearchBook = {
   id: string;
   provider: ProviderId;
+  /**
+   * Presentation title for the hit. When the query matched a translated
+   * edition (e.g. "Juego de Tronos"), this is the edition title; otherwise
+   * the canonical work title.
+   */
   title: string;
+  /** Canonical work title on the provider (e.g. "A Game of Thrones"). */
+  workTitle?: string;
   author: string;
   cover: string;
   rating?: number;
@@ -24,6 +31,17 @@ export type NormalizedSearchBook = {
   genres?: string[];
   isbn?: string | null;
   isbn10?: string | null;
+  language?: string | null;
+  languageCode?: string | null;
+  /** Translator names when a matched edition lists them. */
+  translators?: string[];
+  /**
+   * How presentation fields were chosen:
+   * - work: default work metadata
+   * - edition: a specific edition matched the query / language preference
+   * - isbn: exact ISBN edition match
+   */
+  presentation?: "work" | "edition" | "isbn";
   confidence?: number;
   sources?: BookMetadataSource[];
   edition?: {
@@ -113,6 +131,11 @@ export type BookSearchInput = {
   query: string;
   limit: number;
   type: string;
+  /**
+   * Optional ISO language preference (e.g. es, en). When set, search hits
+   * prefer editions in that language for title/cover/translator presentation.
+   */
+  language?: string;
 };
 
 export type BookDetailsInput = {

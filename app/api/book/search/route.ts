@@ -66,11 +66,27 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const languageParam = searchParams.get("language");
+    const language = languageParam?.trim() || undefined;
+    if (language) {
+      const code = language.toLowerCase().split(/[-_]/)[0] || "";
+      if (!/^[a-z]{2,3}$/.test(code)) {
+        return NextResponse.json(
+          {
+            error:
+              "Invalid language parameter. Use an ISO code like en or es",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const cacheKey = buildLogicalCacheKey("search_books", {
       provider,
       type,
       limit,
       query: query.trim(),
+      language: language || "",
     });
     const cachedData = await getCachedResponse(cacheKey);
 
@@ -85,6 +101,7 @@ export async function GET(req: NextRequest) {
       query: query.trim(),
       limit,
       type,
+      language,
     });
 
     const apiResponse = NextResponse.json(responseData);

@@ -48,14 +48,15 @@ export async function searchBooksByProvider(input: {
   query: string;
   limit: number;
   type: string;
+  language?: string;
 }): Promise<NormalizedSearchResponse> {
-  const { provider, query, limit, type } = input;
+  const { provider, query, limit, type, language } = input;
 
   if (provider === "aggregate") {
-    return searchAggregate({ query, limit, type });
+    return searchAggregate({ query, limit, type, language });
   }
 
-  return searchByProviderId(provider, { query, limit, type });
+  return searchByProviderId(provider, { query, limit, type, language });
 }
 
 export async function getBookDetailsByProvider(input: {

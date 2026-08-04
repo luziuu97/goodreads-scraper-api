@@ -36,10 +36,21 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
 
   const preferACover = Boolean(a.cover) && a.cover.length >= (b.cover?.length ?? 0);
 
+  const translators = Array.from(
+    new Set([...(a.translators ?? []), ...(b.translators ?? [])].filter(Boolean))
+  );
+
+  // Prefer the hit that already resolved a language-specific edition presentation.
+  const preferAPresentation =
+    (a.presentation === "edition" || a.presentation === "isbn") &&
+    b.presentation !== "edition" &&
+    b.presentation !== "isbn";
+
   return {
     id: a.id || b.id,
     provider: a.provider,
-    title: a.title || b.title,
+    title: preferAPresentation ? a.title || b.title : a.title || b.title,
+    workTitle: a.workTitle || b.workTitle,
     author: a.author || b.author,
     cover: preferACover ? a.cover : b.cover || a.cover,
     rating: a.rating ?? b.rating,
@@ -47,6 +58,10 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
     genres: genres.length > 0 ? genres.slice(0, 20) : undefined,
     isbn: a.isbn ?? b.isbn ?? null,
     isbn10: a.isbn10 ?? b.isbn10 ?? null,
+    language: a.language ?? b.language,
+    languageCode: a.languageCode ?? b.languageCode,
+    translators: translators.length > 0 ? translators : undefined,
+    presentation: a.presentation || b.presentation,
     confidence: a.confidence ?? b.confidence,
     sources: [...(a.sources ?? []), ...(b.sources ?? [])],
     edition: a.edition ?? b.edition,

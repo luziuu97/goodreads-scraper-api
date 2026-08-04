@@ -14,8 +14,9 @@ Search for books by title, author, or ISBN.
 
 - **Endpoint**: `GET /api/book/search`
 - **Query parameters**:
-  - `query` (required): Search string
+  - `query` (required): Search string (title, author, ISBN, or a translated title like `Juego de Tronos`)
   - `type` (optional): `all` (default) \| `title` \| `author` \| `isbn`
+  - `language` (optional): ISO code (`en`, `es`, …) — prefer editions in that language for presentation (title/cover/translator)
   - `limit` (optional): 1–50 (default 10)
   - `provider` (optional):
     - omit or `aggregate` — multi-source default (registered providers only)
@@ -26,6 +27,8 @@ Search for books by title, author, or ISBN.
 
 ```
 GET /api/book/search?query=fourth+wing
+GET /api/book/search?query=Juego+de+Tronos
+GET /api/book/search?query=Game+of+Thrones&language=es
 GET /api/book/search?query=9781649374042&provider=hardcover&type=isbn
 ```
 
@@ -36,23 +39,37 @@ GET /api/book/search?query=9781649374042&provider=hardcover&type=isbn
   "success": true,
   "provider": "aggregate",
   "results": {
-    "query": "fourth wing",
+    "query": "Juego de Tronos",
     "totalResults": 1,
     "books": [
       {
-        "id": "1662524",
+        "id": "644",
         "provider": "hardcover",
-        "title": "Fourth Wing",
-        "author": "Rebecca Yarros",
+        "title": "Juego de Tronos",
+        "workTitle": "A Game of Thrones",
+        "author": "George R.R. Martin",
         "cover": "https://...",
-        "rating": 4.58,
-        "publicationDate": "2023-05-02",
-        "genres": ["Fantasy"]
+        "rating": 4.45,
+        "publicationDate": "1996-01-01",
+        "language": "Spanish; Castilian",
+        "languageCode": "es",
+        "translators": ["Cristina Macía"],
+        "presentation": "edition",
+        "genres": ["Fantasy"],
+        "isbn": "9788496208926",
+        "edition": {
+          "id": 15086528,
+          "title": "Juego de tronos",
+          "languageCode": "es",
+          "publisher": "Gigamesh, S.L."
+        }
       }
     ]
   }
 }
 ```
+
+When the query matches a translated edition title (or `language` prefers one), `title` / `cover` / `translators` / `edition` come from that edition. `workTitle` stays the canonical work title. `presentation` is `work` \| `edition` \| `isbn`. Use `edition.id` with book details (`editionId=…`) to open that exact version. Descriptions still come from work-level details when the edition has no separate summary.
 
 Empty search results are not cached. Successful non-empty results are cached for about **1 day**.
 

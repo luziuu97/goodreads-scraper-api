@@ -15,6 +15,7 @@ type HardcoverSearchResult = {
   id?: number | string;
   slug?: string;
   title?: string;
+  alternative_titles?: string[] | null;
   author_names?: string[];
   rating?: number;
   release_date?: string;
@@ -147,11 +148,17 @@ type GraphQLResponse<T> = {
 export type HardcoverNormalizedSearchBook = {
   id: string;
   title: string;
+  /** Canonical work title when presentation title comes from an edition. */
+  workTitle?: string;
   author: string;
   cover: string;
   rating?: number;
   publicationDate?: string;
   genres?: string[];
+  language?: string | null;
+  languageCode?: string | null;
+  translators?: string[];
+  presentation?: "work" | "edition" | "isbn";
   edition?: HardcoverNormalizedEdition;
 };
 
@@ -740,6 +747,296 @@ function isLikelyIsbnQuery(query: string): boolean {
   return /^(?:\d{9}[\dX]|\d{13})$/.test(normalized);
 }
 
+/** Normalize titles for cross-language matching (accents/punctuation/case). */
+function normalizeTitleForMatch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/['’ʻʻ`]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Similarity in [0, 1] between two titles.
+ * Exact / containment preferred; falls back to token Jaccard.
+ */
+function titleSimilarity(a: string, b: string): number {
+  const na = normalizeTitleForMatch(a);
+  const nb = normalizeTitleForMatch(b);
+  if (!na || !nb) {
+    return 0;
+  }
+  if (na === nb) {
+    return 1;
+  }
+
+  const shorter = na.length <= nb.length ? na : nb;
+  const longer = na.length <= nb.length ? nb : na;
+  if (longer.includes(shorter) && shorter.length >= 4) {
+    return 0.72 + 0.23 * (shorter.length / longer.length);
+  }
+
+  const tokensA = new Set(na.split(" ").filter((t) => t.length > 1));
+  const tokensB = new Set(nb.split(" ").filter((t) => t.length > 1));
+  if (tokensA.size === 0 || tokensB.size === 0) {
+    return 0;
+  }
+
+  let intersection = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) {
+      intersection += 1;
+    }
+  }
+  const union = tokensA.size + tokensB.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+type EnrichmentEdition = {
+  id?: number | null;
+  title?: string | null;
+  isbn_10?: string | null;
+  isbn_13?: string | null;
+  asin?: string | null;
+  pages?: number | null;
+  edition_format?: string | null;
+  release_date?: string | null;
+  users_count?: number | null;
+  image?: HardcoverImage;
+  language?: HardcoverLanguage;
+  country?: HardcoverCountry;
+  publisher?: { name?: string | null } | null;
+  contributions?: HardcoverContribution[] | null;
+};
+
+type EnrichmentBook = {
+  id: number;
+  title?: string | null;
+  editions?: EnrichmentEdition[] | null;
+};
+
+/**
+ * Pick the best edition for a search hit based on query title match and
+ * optional language preference. Returns null when work-level presentation is better.
+ */
+function pickPresentationEdition(
+  query: string,
+  workTitle: string,
+  editions: EnrichmentEdition[],
+  languagePref: string | null
+): { edition: EnrichmentEdition; score: number } | null {
+  if (editions.length === 0) {
+    return null;
+  }
+
+  const workScore = titleSimilarity(query, workTitle);
+
+  // When the caller asks for a language, only score editions in that language.
+  // (Otherwise English "A Game of Thrones" editions always beat Spanish packaging
+  // on title similarity alone.)
+  const candidates = languagePref
+    ? editions.filter((edition) => {
+        const code = trimToNull(edition.language?.code2)?.toLowerCase();
+        return code === languagePref;
+      })
+    : editions;
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  let best: { edition: EnrichmentEdition; score: number } | null = null;
+
+  for (const edition of candidates) {
+    if (typeof edition.id !== "number") {
+      continue;
+    }
+
+    const editionTitle = trimToNull(edition.title) || "";
+    const titleScore = editionTitle
+      ? titleSimilarity(query, editionTitle)
+      : 0;
+
+    let score = titleScore * 100;
+
+    if (!languagePref && workScore >= 0.85 && titleScore + 0.05 < workScore) {
+      // Without a language filter, don't replace a strong work-title match
+      // with a poorly matching edition title.
+      score -= 25;
+    }
+
+    // Mild popularity tie-break so sparse junk editions don't win ties.
+    const users =
+      typeof edition.users_count === "number" && Number.isFinite(edition.users_count)
+        ? edition.users_count
+        : 0;
+    score += Math.min(users, 500) / 500;
+
+    // Prefer editions that actually have a distinct presentation (title/cover).
+    if (editionTitle || toCoverUrl(edition.image || null)) {
+      score += 1;
+    }
+
+    // Prefer editions that list translators when scores are otherwise close.
+    const hasTranslator = groupContributions(edition.contributions).translators.length > 0;
+    if (hasTranslator) {
+      score += 2;
+    }
+
+    if (!best || score > best.score) {
+      best = { edition, score };
+    }
+  }
+
+  if (!best) {
+    return null;
+  }
+
+  // Explicit language preference: always present the best locale edition.
+  if (languagePref) {
+    return best;
+  }
+
+  const bestTitle = trimToNull(best.edition.title) || "";
+  const bestTitleScore = bestTitle ? titleSimilarity(query, bestTitle) : 0;
+
+  // Promote edition presentation when:
+  // 1) edition title matches the query better than the work title, or
+  // 2) query looks like a translation (weak work match, strong edition match).
+  const betterThanWork = bestTitleScore >= workScore + 0.08 && bestTitleScore >= 0.55;
+  const translationQuery =
+    workScore < 0.7 && bestTitleScore >= 0.55;
+
+  if (betterThanWork || translationQuery) {
+    return best;
+  }
+
+  return null;
+}
+
+async function enrichSearchHitsWithEditions(
+  books: HardcoverNormalizedSearchBook[],
+  query: string,
+  languagePref: string | null
+): Promise<HardcoverNormalizedSearchBook[]> {
+  const numericIds = books
+    .map((book) => (/^\d+$/.test(book.id) ? Number(book.id) : null))
+    .filter((id): id is number => id !== null);
+
+  if (numericIds.length === 0) {
+    return books.map((book) => ({
+      ...book,
+      workTitle: book.workTitle || book.title,
+      presentation: book.presentation || "work",
+    }));
+  }
+
+  const enrichQuery = `
+    query EnrichSearchEditions($ids: [Int!]!) {
+      books(where: { id: { _in: $ids } }) {
+        id
+        title
+        editions(limit: 30, order_by: { users_count: desc }) {
+          id
+          title
+          isbn_10
+          isbn_13
+          asin
+          pages
+          edition_format
+          release_date
+          users_count
+          image {
+            url
+          }
+          language {
+            language
+            code2
+          }
+          country {
+            name
+            code2
+          }
+          publisher {
+            name
+          }
+          contributions {
+            ${contributionSelection()}
+          }
+        }
+      }
+    }
+  `;
+
+  let enrichmentBooks: EnrichmentBook[] = [];
+  try {
+    const data = await hardcoverGraphQLRequest<{ books?: EnrichmentBook[] }>(
+      enrichQuery,
+      { ids: numericIds }
+    );
+    enrichmentBooks = Array.isArray(data.books) ? data.books : [];
+  } catch {
+    // Presentation enrichment is best-effort; fall back to work metadata.
+    return books.map((book) => ({
+      ...book,
+      workTitle: book.workTitle || book.title,
+      presentation: book.presentation || "work",
+    }));
+  }
+
+  const byId = new Map<number, EnrichmentBook>();
+  for (const entry of enrichmentBooks) {
+    if (typeof entry.id === "number") {
+      byId.set(entry.id, entry);
+    }
+  }
+
+  return books.map((book) => {
+    const numericId = /^\d+$/.test(book.id) ? Number(book.id) : null;
+    const enrichment = numericId !== null ? byId.get(numericId) : undefined;
+    const editions = Array.isArray(enrichment?.editions) ? enrichment.editions : [];
+    const workTitle = book.workTitle || book.title;
+
+    const picked = pickPresentationEdition(query, workTitle, editions, languagePref);
+    if (!picked) {
+      return {
+        ...book,
+        workTitle,
+        presentation: book.presentation || "work",
+      };
+    }
+
+    const edition = picked.edition;
+    const normalized = normalizeEdition(edition as HardcoverEditionDetails);
+    const grouped = groupContributions(edition.contributions);
+    const presentationTitle = trimToNull(edition.title) || book.title;
+    const editionCover = toCoverUrl(edition.image || null);
+    const { language, languageCode } = languageFromEdition(edition.language);
+
+    return {
+      ...book,
+      title: presentationTitle,
+      workTitle,
+      cover: editionCover || book.cover,
+      publicationDate:
+        trimToNull(edition.release_date) || book.publicationDate,
+      language,
+      languageCode,
+      translators:
+        grouped.translators.length > 0
+          ? grouped.translators.map((person) => person.name)
+          : undefined,
+      presentation: "edition",
+      edition: normalized,
+      // Authors stay work-level primary writers; don't replace with empty.
+      author: book.author || authorNamesFromContributions(edition.contributions),
+    };
+  });
+}
+
 async function searchHardcoverBooksByIsbn(
   normalizedIsbn: string,
   limit: number
@@ -775,10 +1072,11 @@ async function searchHardcoverBooksByIsbn(
   const books = editions
     .map((edition): HardcoverNormalizedSearchBook | null => {
       const linkedBook = edition.book;
+      const workTitle =
+        (typeof linkedBook?.title === "string" && linkedBook.title.trim()) || "";
+      // ISBN hits should present the matched edition title (e.g. "Le Petit Prince").
       const title =
-        (typeof linkedBook?.title === "string" && linkedBook.title.trim()) ||
-        (typeof edition.title === "string" && edition.title.trim()) ||
-        "";
+        (typeof edition.title === "string" && edition.title.trim()) || workTitle;
       if (!title) {
         return null;
       }
@@ -788,6 +1086,13 @@ async function searchHardcoverBooksByIsbn(
       const author =
         authorNamesFromContributions(edition.contributions) ||
         authorNamesFromContributions(linkedBook?.contributions ?? null);
+
+      const grouped = groupContributions(
+        edition.contributions?.length
+          ? edition.contributions
+          : linkedBook?.contributions ?? null
+      );
+      const { language, languageCode } = languageFromEdition(edition.language);
 
       const id =
         typeof linkedBook?.id === "number"
@@ -801,6 +1106,7 @@ async function searchHardcoverBooksByIsbn(
       return {
         id,
         title,
+        workTitle: workTitle || title,
         author,
         cover: toCoverUrl(edition.image),
         rating:
@@ -815,6 +1121,13 @@ async function searchHardcoverBooksByIsbn(
           (typeof linkedBook?.release_date === "string" && linkedBook.release_date.trim()) ||
           undefined,
         genres: getEditionGenres(linkedBook?.cached_tags ?? null),
+        language,
+        languageCode,
+        translators:
+          grouped.translators.length > 0
+            ? grouped.translators.map((person) => person.name)
+            : undefined,
+        presentation: "isbn",
         edition: normalizeEdition(edition),
       };
     })
@@ -830,6 +1143,7 @@ export async function searchHardcoverBooks(input: {
   query: string;
   limit: number;
   type: string;
+  language?: string;
 }): Promise<{ totalResults: number; books: HardcoverNormalizedSearchBook[] }> {
   const searchQuery = `
     query SearchBooks($query: String!, $perPage: Int!, $page: Int!, $fields: String!, $weights: String!) {
@@ -854,9 +1168,18 @@ export async function searchHardcoverBooks(input: {
   const effectiveQuery =
     effectiveType === "isbn" ? normalizeIsbnQuery(input.query) : input.query;
 
+  const languagePrefRaw = (input.language || "").trim().toLowerCase();
+  const languagePref =
+    languagePrefRaw && /^[a-z]{2,3}$/.test(languagePrefRaw.split(/[-_]/)[0] || "")
+      ? languagePrefRaw.split(/[-_]/)[0]
+      : null;
+
   if (effectiveType === "isbn") {
     return searchHardcoverBooksByIsbn(effectiveQuery, input.limit);
   }
+
+  // Author search: skip edition presentation enrichment (titles rarely help).
+  const shouldEnrichEditions = effectiveType !== "author";
 
   const data = await hardcoverGraphQLRequest<{
     search: {
@@ -871,7 +1194,7 @@ export async function searchHardcoverBooks(input: {
   });
 
   const rawHits = Array.isArray(data.search?.results?.hits) ? data.search.results.hits : [];
-  const books = rawHits
+  const baseBooks = rawHits
     .map((hit): HardcoverNormalizedSearchBook | null => {
       const result = hit.document;
       const title = typeof result?.title === "string" ? result.title.trim() : "";
@@ -891,6 +1214,7 @@ export async function searchHardcoverBooks(input: {
       return {
         id,
         title,
+        workTitle: title,
         author: authorNames.join(", "),
         cover: toCoverUrl(result?.image || null),
         rating: toNumber(result?.rating),
@@ -899,9 +1223,14 @@ export async function searchHardcoverBooks(input: {
             ? result.release_date
             : undefined,
         genres: genres.length > 0 ? genres : undefined,
+        presentation: "work",
       };
     })
     .filter((book): book is HardcoverNormalizedSearchBook => Boolean(book));
+
+  const books = shouldEnrichEditions
+    ? await enrichSearchHitsWithEditions(baseBooks, effectiveQuery, languagePref)
+    : baseBooks;
 
   return {
     totalResults:
