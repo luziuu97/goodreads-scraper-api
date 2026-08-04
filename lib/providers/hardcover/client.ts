@@ -859,31 +859,40 @@ function pickPresentationEdition(
     const titleScore = editionTitle
       ? titleSimilarity(query, editionTitle)
       : 0;
-
-    let score = titleScore * 100;
-
-    if (!languagePref && workScore >= 0.85 && titleScore + 0.05 < workScore) {
-      // Without a language filter, don't replace a strong work-title match
-      // with a poorly matching edition title.
-      score -= 25;
-    }
-
-    // Mild popularity tie-break so sparse junk editions don't win ties.
     const users =
       typeof edition.users_count === "number" && Number.isFinite(edition.users_count)
         ? edition.users_count
         : 0;
-    score += Math.min(users, 500) / 500;
+    const hasCover = Boolean(toCoverUrl(edition.image || null));
+    const hasTranslator =
+      groupContributions(edition.contributions).translators.length > 0;
+    const localizedTitle =
+      Boolean(editionTitle) && titleSimilarity(editionTitle, workTitle) < 0.85;
 
-    // Prefer editions that actually have a distinct presentation (title/cover).
-    if (editionTitle || toCoverUrl(edition.image || null)) {
-      score += 1;
-    }
+    let score: number;
 
-    // Prefer editions that list translators when scores are otherwise close.
-    const hasTranslator = groupContributions(edition.contributions).translators.length > 0;
-    if (hasTranslator) {
-      score += 2;
+    if (languagePref) {
+      // Query may be in the original language (e.g. "A Game of Thrones" + language=es).
+      // Prefer popular localized editions over bilingual/title-similar outliers.
+      score =
+        Math.min(users, 2000) / 10 +
+        (localizedTitle ? 25 : 0) +
+        (hasCover ? 8 : 0) +
+        (hasTranslator ? 12 : 0) +
+        titleScore * 15;
+    } else {
+      score = titleScore * 100;
+      if (workScore >= 0.85 && titleScore + 0.05 < workScore) {
+        // Don't replace a strong work-title match with a weak edition title.
+        score -= 25;
+      }
+      score += Math.min(users, 500) / 500;
+      if (editionTitle || hasCover) {
+        score += 1;
+      }
+      if (hasTranslator) {
+        score += 2;
+      }
     }
 
     if (!best || score > best.score) {
@@ -934,12 +943,55 @@ async function enrichSearchHitsWithEditions(
     }));
   }
 
-  const enrichQuery = `
+  // When a language is preferred, fetch editions in that language so they aren't
+  // crowded out by popular English printings. Otherwise fetch top editions by use.
+  const editionsArgs = languagePref
+    ? `limit: 20, order_by: { users_count: desc }, where: { language: { code2: { _eq: $language } } }`
+    : `limit: 30, order_by: { users_count: desc }`;
+
+  const enrichQuery = languagePref
+    ? `
+    query EnrichSearchEditionsByLanguage($ids: [Int!]!, $language: String!) {
+      books(where: { id: { _in: $ids } }) {
+        id
+        title
+        editions(${editionsArgs}) {
+          id
+          title
+          isbn_10
+          isbn_13
+          asin
+          pages
+          edition_format
+          release_date
+          users_count
+          image {
+            url
+          }
+          language {
+            language
+            code2
+          }
+          country {
+            name
+            code2
+          }
+          publisher {
+            name
+          }
+          contributions {
+            ${contributionSelection()}
+          }
+        }
+      }
+    }
+  `
+    : `
     query EnrichSearchEditions($ids: [Int!]!) {
       books(where: { id: { _in: $ids } }) {
         id
         title
-        editions(limit: 30, order_by: { users_count: desc }) {
+        editions(${editionsArgs}) {
           id
           title
           isbn_10
@@ -975,7 +1027,7 @@ async function enrichSearchHitsWithEditions(
   try {
     const data = await hardcoverGraphQLRequest<{ books?: EnrichmentBook[] }>(
       enrichQuery,
-      { ids: numericIds }
+      languagePref ? { ids: numericIds, language: languagePref } : { ids: numericIds }
     );
     enrichmentBooks = Array.isArray(data.books) ? data.books : [];
   } catch {
