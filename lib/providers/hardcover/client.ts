@@ -31,6 +31,27 @@ type HardcoverSearchResults = {
   hits?: HardcoverSearchHit[] | null;
 };
 
+type HardcoverLanguage = {
+  language?: string | null;
+  code2?: string | null;
+  code3?: string | null;
+} | null;
+
+type HardcoverCountry = {
+  name?: string | null;
+  code2?: string | null;
+  code3?: string | null;
+} | null;
+
+type HardcoverContribution = {
+  contribution?: string | null;
+  author?: {
+    id?: number | null;
+    name?: string | null;
+    slug?: string | null;
+  } | null;
+};
+
 type HardcoverEditionSearchResult = {
   id?: number;
   isbn_10?: string | null;
@@ -42,9 +63,12 @@ type HardcoverEditionSearchResult = {
   edition_format?: string | null;
   pages?: number | null;
   image?: HardcoverImage;
+  language?: HardcoverLanguage;
+  country?: HardcoverCountry;
   publisher?: {
     name?: string | null;
   } | null;
+  contributions?: HardcoverContribution[] | null;
   book?: {
     id?: number | null;
     slug?: string | null;
@@ -52,13 +76,7 @@ type HardcoverEditionSearchResult = {
     rating?: number | null;
     release_date?: string | null;
     cached_tags?: Record<string, Array<{ tag?: string | null }>> | null;
-    contributions?: Array<{
-      author?: {
-        id?: number | null;
-        name?: string | null;
-        slug?: string | null;
-      } | null;
-    }> | null;
+    contributions?: HardcoverContribution[] | null;
   } | null;
 };
 
@@ -91,13 +109,7 @@ type HardcoverDetailsBook = {
       slug?: string | null;
     } | null;
   }> | null;
-  contributions?: Array<{
-    author?: {
-      id?: number | null;
-      name?: string | null;
-      slug?: string | null;
-    } | null;
-  }> | null;
+  contributions?: HardcoverContribution[] | null;
   image?: Array<{
     url?: string | null;
   }> | null;
@@ -115,9 +127,12 @@ type HardcoverEditionDetails = {
   isbn_10?: string | null;
   isbn_13?: string | null;
   asin?: string | null;
+  language?: HardcoverLanguage;
+  country?: HardcoverCountry;
   publisher?: {
     name?: string | null;
   } | null;
+  contributions?: HardcoverContribution[] | null;
   book?: {
     id?: number | null;
     slug?: string | null;
@@ -140,6 +155,14 @@ export type HardcoverNormalizedSearchBook = {
   edition?: HardcoverNormalizedEdition;
 };
 
+export type HardcoverContributor = {
+  id: number;
+  name: string;
+  url: string;
+  /** Raw contribution role from Hardcover when known (e.g. Translator). */
+  role?: string | null;
+};
+
 export type HardcoverNormalizedEdition = {
   id: number;
   title?: string;
@@ -150,6 +173,10 @@ export type HardcoverNormalizedEdition = {
   publicationDate: string | null;
   pages: number | null;
   publisher: string | null;
+  language: string | null;
+  languageCode: string | null;
+  country: string | null;
+  countryCode: string | null;
   cover: string;
 };
 
@@ -162,9 +189,15 @@ export type HardcoverNormalizedBookDetails = {
     pages: number | null;
     slug: string;
     title: string;
-    author: Array<{ id: number; name: string; url: string }>;
-    translator: null;
-    illustrators: unknown[];
+    author: HardcoverContributor[];
+    /** First translator when present (legacy singular field). */
+    translator: HardcoverContributor | null;
+    translators: HardcoverContributor[];
+    illustrators: HardcoverContributor[];
+    narrators: HardcoverContributor[];
+    editors: HardcoverContributor[];
+    /** Other non-author contributors with their raw role when known. */
+    otherContributors: HardcoverContributor[];
     rating: string;
     ratingCount: string;
     reviewsCount: string;
@@ -175,7 +208,10 @@ export type HardcoverNormalizedBookDetails = {
     isbn: string | null;
     isbn10: string | null;
     asin: string | null;
-    language: null;
+    language: string | null;
+    languageCode: string | null;
+    country: string | null;
+    countryCode: string | null;
     publishedBy: string | null;
     type: string | null;
     edition: HardcoverNormalizedEdition | null;
@@ -283,23 +319,196 @@ function toCoverUrl(image: HardcoverImage | HardcoverDetailsBook["image"]): stri
   return typeof image.url === "string" ? image.url : "";
 }
 
-function mapHardcoverAuthors(book: HardcoverDetailsBook): Array<{ id: number; name: string; url: string }> {
-  const contributionAuthors =
-    book.contributions
-      ?.map((contribution) => contribution.author)
-      .filter((author): author is NonNullable<typeof author> => Boolean(author?.name))
-      .map((author, index) => ({
-        id: typeof author.id === "number" ? author.id : index + 1,
-        name: author.name?.trim() || "",
-        url: author.slug ? `https://hardcover.app/authors/${author.slug}` : "",
-      }))
-      .filter((author) => author.name) || [];
+type ContributionRole =
+  | "author"
+  | "translator"
+  | "illustrator"
+  | "narrator"
+  | "editor"
+  | "other";
 
-  if (contributionAuthors.length > 0) {
-    return contributionAuthors;
+type GroupedContributors = {
+  authors: HardcoverContributor[];
+  translators: HardcoverContributor[];
+  illustrators: HardcoverContributor[];
+  narrators: HardcoverContributor[];
+  editors: HardcoverContributor[];
+  other: HardcoverContributor[];
+};
+
+/**
+ * Classify a free-text Hardcover contribution role.
+ * null / empty / Author-like → author (Hardcover convention).
+ */
+function classifyContributionRole(role: string | null | undefined): ContributionRole {
+  const raw = (role ?? "").trim();
+  if (!raw) {
+    return "author";
   }
 
-  return [];
+  const normalized = raw.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+
+  // Order matters: check more specific multi-word roles before generic substrings.
+  if (
+    /\b(translator|translation|translated by|traduct(?:eur|ora?|ion)|traduttore|übersetzer|vertaler|번역|訳者|译者)\b/.test(
+      normalized
+    ) ||
+    normalized === "tr." ||
+    normalized === "trans."
+  ) {
+    return "translator";
+  }
+
+  if (
+    /\b(illustrator|illustration|illustrated by|illustrations by|cover artist|artist|drawer|colorist|inker|letterer|penciller|penciler|cartoonist|mangaka)\b/.test(
+      normalized
+    ) ||
+    normalized === "ill." ||
+    normalized === "ills."
+  ) {
+    return "illustrator";
+  }
+
+  if (
+    /\b(narrator|narrated by|reader|read by|performed by|voice actor|voiceover)\b/.test(
+      normalized
+    )
+  ) {
+    return "narrator";
+  }
+
+  if (
+    /\b(editor|edited by|compilation editor|series editor|abridger|abridged by)\b/.test(
+      normalized
+    )
+  ) {
+    return "editor";
+  }
+
+  if (
+    normalized === "author" ||
+    normalized === "writer" ||
+    normalized === "auteur" ||
+    normalized === "autor" ||
+    normalized === "autora" ||
+    normalized === "著者" ||
+    normalized === "저자" ||
+    normalized === "primary contributor" ||
+    normalized === "co-author" ||
+    normalized === "coauthor" ||
+    normalized === "co author" ||
+    normalized === "ghostwriter" ||
+    normalized === "ghost writer"
+  ) {
+    return "author";
+  }
+
+  // Unknown free-text roles (messy catalog data) stay out of the author list.
+  return "other";
+}
+
+function mapContributor(
+  contribution: HardcoverContribution,
+  index: number
+): HardcoverContributor | null {
+  const author = contribution.author;
+  const name = author?.name?.trim() || "";
+  if (!name) {
+    return null;
+  }
+
+  return {
+    id: typeof author?.id === "number" ? author.id : index + 1,
+    name,
+    url: author?.slug ? `https://hardcover.app/authors/${author.slug}` : "",
+    role: trimToNull(contribution.contribution),
+  };
+}
+
+function groupContributions(
+  contributions: HardcoverContribution[] | null | undefined
+): GroupedContributors {
+  const grouped: GroupedContributors = {
+    authors: [],
+    translators: [],
+    illustrators: [],
+    narrators: [],
+    editors: [],
+    other: [],
+  };
+
+  const seen = new Set<string>();
+
+  (contributions || []).forEach((contribution, index) => {
+    const person = mapContributor(contribution, index);
+    if (!person) {
+      return;
+    }
+
+    const role = classifyContributionRole(contribution.contribution);
+    const dedupeKey = `${role}:${person.id}:${person.name.toLowerCase()}`;
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+
+    switch (role) {
+      case "author":
+        grouped.authors.push(person);
+        break;
+      case "translator":
+        grouped.translators.push(person);
+        break;
+      case "illustrator":
+        grouped.illustrators.push(person);
+        break;
+      case "narrator":
+        grouped.narrators.push(person);
+        break;
+      case "editor":
+        grouped.editors.push(person);
+        break;
+      default:
+        grouped.other.push(person);
+        break;
+    }
+  });
+
+  return grouped;
+}
+
+/**
+ * Prefer edition-level contributions when present (edition-specific translators etc.),
+ * otherwise fall back to book-level contributions.
+ */
+function resolveContributors(
+  bookContributions: HardcoverContribution[] | null | undefined,
+  editionContributions: HardcoverContribution[] | null | undefined
+): GroupedContributors {
+  const editionGrouped = groupContributions(editionContributions);
+  const editionHasPeople =
+    editionGrouped.authors.length +
+      editionGrouped.translators.length +
+      editionGrouped.illustrators.length +
+      editionGrouped.narrators.length +
+      editionGrouped.editors.length +
+      editionGrouped.other.length >
+    0;
+
+  if (editionHasPeople) {
+    return editionGrouped;
+  }
+
+  return groupContributions(bookContributions);
+}
+
+function authorNamesFromContributions(
+  contributions: HardcoverContribution[] | null | undefined
+): string {
+  return groupContributions(contributions)
+    .authors.map((author) => author.name)
+    .filter(Boolean)
+    .join(", ");
 }
 
 function getSeriesLabel(book: HardcoverDetailsBook): string {
@@ -354,12 +563,33 @@ function getEditionGenres(
   return genres.length > 0 ? genres : undefined;
 }
 
+function languageFromEdition(
+  language: HardcoverLanguage | undefined
+): { language: string | null; languageCode: string | null } {
+  return {
+    language: trimToNull(language?.language),
+    languageCode: trimToNull(language?.code2)?.toLowerCase() ?? null,
+  };
+}
+
+function countryFromEdition(
+  country: HardcoverCountry | undefined
+): { country: string | null; countryCode: string | null } {
+  return {
+    country: trimToNull(country?.name),
+    countryCode: trimToNull(country?.code2)?.toLowerCase() ?? null,
+  };
+}
+
 function normalizeEdition(
   edition: HardcoverEditionSearchResult | HardcoverEditionDetails | null | undefined
 ): HardcoverNormalizedEdition | undefined {
   if (typeof edition?.id !== "number") {
     return undefined;
   }
+
+  const { language, languageCode } = languageFromEdition(edition.language);
+  const { country, countryCode } = countryFromEdition(edition.country);
 
   return {
     id: edition.id,
@@ -371,6 +601,10 @@ function normalizeEdition(
     publicationDate: trimToNull(edition.release_date),
     pages: typeof edition.pages === "number" ? edition.pages : null,
     publisher: trimToNull(edition.publisher?.name),
+    language,
+    languageCode,
+    country,
+    countryCode,
     cover: toCoverUrl(edition.image || null),
   };
 }
@@ -386,7 +620,22 @@ function imageSelection(): string {
   `;
 }
 
-function editionSelection(includeBook = false, includeImageMeta = false): string {
+function contributionSelection(): string {
+  return `
+    contribution
+    author {
+      id
+      name
+      slug
+    }
+  `;
+}
+
+function editionSelection(
+  includeBook = false,
+  includeImageMeta = false,
+  includeContributions = false
+): string {
   const imageFields = includeImageMeta
     ? imageSelection()
     : `
@@ -406,9 +655,23 @@ function editionSelection(includeBook = false, includeImageMeta = false): string
     image {
       ${imageFields}
     }
+    language {
+      language
+      code2
+    }
+    country {
+      name
+      code2
+      code3
+    }
     publisher {
       name
     }
+    ${includeContributions ? `
+    contributions {
+      ${contributionSelection()}
+    }
+    ` : ""}
     ${includeBook ? `
     book {
       id
@@ -485,7 +748,7 @@ async function searchHardcoverBooksByIsbn(
   const isbnQuery = `
     query SearchBooksByIsbn($isbn: String!, $limit: Int!) {
       editions(where: { ${fieldName}: { _eq: $isbn } }, limit: $limit) {
-        ${editionSelection()}
+        ${editionSelection(false, false, true)}
         book {
           id
           slug
@@ -494,11 +757,7 @@ async function searchHardcoverBooksByIsbn(
           release_date
           cached_tags
           contributions {
-            author {
-              id
-              name
-              slug
-            }
+            ${contributionSelection()}
           }
         }
       }
@@ -524,10 +783,11 @@ async function searchHardcoverBooksByIsbn(
         return null;
       }
 
-      const authors =
-        linkedBook?.contributions
-          ?.map((contribution) => contribution.author?.name?.trim() || "")
-          .filter(Boolean) || [];
+      // Prefer edition-level authors when present; otherwise book-level authors only
+      // (exclude translators/illustrators from the author string).
+      const author =
+        authorNamesFromContributions(edition.contributions) ||
+        authorNamesFromContributions(linkedBook?.contributions ?? null);
 
       const id =
         typeof linkedBook?.id === "number"
@@ -541,7 +801,7 @@ async function searchHardcoverBooksByIsbn(
       return {
         id,
         title,
-        author: authors.join(", "),
+        author,
         cover: toCoverUrl(edition.image),
         rating:
           typeof linkedBook?.rating === "number" && Number.isFinite(linkedBook.rating)
@@ -549,9 +809,10 @@ async function searchHardcoverBooksByIsbn(
             : typeof edition.rating === "number" && Number.isFinite(edition.rating)
               ? edition.rating
               : undefined,
+        // Prefer the matched edition's release date for ISBN searches.
         publicationDate:
-          (typeof linkedBook?.release_date === "string" && linkedBook.release_date.trim()) ||
           (typeof edition.release_date === "string" && edition.release_date.trim()) ||
+          (typeof linkedBook?.release_date === "string" && linkedBook.release_date.trim()) ||
           undefined,
         genres: getEditionGenres(linkedBook?.cached_tags ?? null),
         edition: normalizeEdition(edition),
@@ -686,17 +947,13 @@ export async function fetchHardcoverBookDetails(
       }
     }
     contributions {
-      author {
-        id
-        name
-        slug
-      }
+      ${contributionSelection()}
     }
     image {
       url
     }
     default_cover_edition {
-      ${editionSelection()}
+      ${editionSelection(false, false, true)}
     }
   `;
 
@@ -726,7 +983,6 @@ export async function fetchHardcoverBookDetails(
     throw new Error(`No Hardcover book found for slug "${slugOrId}"`);
   }
 
-  const authors = mapHardcoverAuthors(book);
   const series = getSeriesLabel(book);
   const seriesURL = getSeriesUrl(book);
   let edition: HardcoverEditionDetails | null | undefined = book.default_cover_edition;
@@ -736,7 +992,7 @@ export async function fetchHardcoverBookDetails(
       `
         query GetEditionDetailsById($editionId: Int!) {
           editions(where: { id: { _eq: $editionId } }, limit: 1) {
-            ${editionSelection(true)}
+            ${editionSelection(true, false, true)}
           }
         }
       `,
@@ -759,10 +1015,20 @@ export async function fetchHardcoverBookDetails(
     edition = matchedEdition;
   }
 
+  const contributors = resolveContributors(book.contributions, edition?.contributions);
+  const { language, languageCode } = languageFromEdition(edition?.language);
+  const { country, countryCode } = countryFromEdition(edition?.country);
+  const normalizedEdition = normalizeEdition(edition) || null;
+
   const rating =
     typeof book.rating === "number" && Number.isFinite(book.rating)
       ? book.rating.toFixed(2)
       : "";
+
+  // Prefer edition title for a specific matched version (ISBN / editionId);
+  // otherwise keep the work title.
+  const displayTitle =
+    (typeof options.editionId === "number" && trimToNull(edition?.title)) || book.title;
 
   return {
     scrapedURL: `https://hardcover.app/books/${book.slug}`,
@@ -772,10 +1038,14 @@ export async function fetchHardcoverBookDetails(
       seriesURL,
       pages: typeof edition?.pages === "number" ? edition.pages : null,
       slug: book.slug,
-      title: book.title,
-      author: authors,
-      translator: null,
-      illustrators: [],
+      title: displayTitle,
+      author: contributors.authors,
+      translator: contributors.translators[0] || null,
+      translators: contributors.translators,
+      illustrators: contributors.illustrators,
+      narrators: contributors.narrators,
+      editors: contributors.editors,
+      otherContributors: contributors.other,
       rating,
       ratingCount:
         typeof book.ratings_count === "number" ? String(book.ratings_count) : "",
@@ -789,10 +1059,13 @@ export async function fetchHardcoverBookDetails(
       isbn: trimToNull(edition?.isbn_13),
       isbn10: trimToNull(edition?.isbn_10),
       asin: trimToNull(edition?.asin),
-      language: null,
+      language,
+      languageCode,
+      country,
+      countryCode,
       publishedBy: trimToNull(edition?.publisher?.name),
       type: trimToNull(edition?.edition_format),
-      edition: normalizeEdition(edition) || null,
+      edition: normalizedEdition,
       related: [],
       reviewBreakdown: {
         rating5: "",
@@ -823,10 +1096,8 @@ type HardcoverCoversEdition = {
   publisher?: {
     name?: string | null;
   } | null;
-  language?: {
-    language?: string | null;
-    code2?: string | null;
-  } | null;
+  language?: HardcoverLanguage;
+  country?: HardcoverCountry;
 };
 
 type HardcoverCoversBook = {
@@ -857,6 +1128,8 @@ export type HardcoverNormalizedEditionCover = {
   publisher: string | null;
   language: string | null;
   languageCode: string | null;
+  country: string | null;
+  countryCode: string | null;
   isDefault: boolean;
 };
 
@@ -916,6 +1189,10 @@ export async function fetchHardcoverBookCovers(
         language
         code2
       }
+      country {
+        name
+        code2
+      }
     }
   `;
 
@@ -971,6 +1248,9 @@ export async function fetchHardcoverBookCovers(
       continue;
     }
 
+    const { language, languageCode } = languageFromEdition(edition.language);
+    const { country, countryCode } = countryFromEdition(edition.country);
+
     covers.push({
       editionId: edition.id,
       title: trimToNull(edition.title),
@@ -988,8 +1268,10 @@ export async function fetchHardcoverBookCovers(
       publicationDate: trimToNull(edition.release_date),
       pages: typeof edition.pages === "number" ? edition.pages : null,
       publisher: trimToNull(edition.publisher?.name),
-      language: trimToNull(edition.language?.language),
-      languageCode: trimToNull(edition.language?.code2),
+      language,
+      languageCode,
+      country,
+      countryCode,
       isDefault: defaultCoverEditionId === edition.id,
     });
   }
@@ -1160,13 +1442,7 @@ type HardcoverSeriesDetailsRow = {
       title?: string | null;
       rating?: number | null;
       release_date?: string | null;
-      contributions?: Array<{
-        author?: {
-          id?: number | null;
-          name?: string | null;
-          slug?: string | null;
-        } | null;
-      }> | null;
+      contributions?: HardcoverContribution[] | null;
       image?: HardcoverImage;
       default_cover_edition?: HardcoverEditionLangFormat | null;
       default_physical_edition?: HardcoverEditionLangFormat | null;
@@ -1402,10 +1678,8 @@ function buildSeriesBookCandidate(
     return null;
   }
 
-  const authors =
-    book?.contributions
-      ?.map((contribution) => contribution.author?.name?.trim() || "")
-      .filter(Boolean) || [];
+  const authorsList = authorNamesFromContributions(book?.contributions ?? null);
+  const authors = authorsList ? authorsList.split(", ") : [];
 
   const id =
     typeof book?.id === "number"
@@ -1935,11 +2209,7 @@ export async function fetchHardcoverSeriesDetails(
         rating
         release_date
         contributions {
-          author {
-            id
-            name
-            slug
-          }
+          ${contributionSelection()}
         }
         image {
           url
@@ -2165,6 +2435,8 @@ export type HardcoverNormalizedBookFormat = {
   readingFormat: string | null;
   language: string | null;
   languageCode: string | null;
+  country: string | null;
+  countryCode: string | null;
   isbn: string | null;
   isbn10: string | null;
   asin: string | null;
@@ -2206,10 +2478,8 @@ type HardcoverFormatsEdition = {
   pages?: number | null;
   release_date?: string | null;
   users_count?: number | null;
-  language?: {
-    code2?: string | null;
-    language?: string | null;
-  } | null;
+  language?: HardcoverLanguage;
+  country?: HardcoverCountry;
   reading_format?: {
     id?: number | null;
     format?: string | null;
@@ -2272,6 +2542,10 @@ export async function fetchHardcoverBookFormats(
       language {
         code2
         language
+      }
+      country {
+        name
+        code2
       }
       reading_format {
         id
@@ -2337,11 +2611,9 @@ export async function fetchHardcoverBookFormats(
       continue;
     }
 
-    const languageCode =
-      typeof edition.language?.code2 === "string"
-        ? edition.language.code2.trim().toLowerCase()
-        : null;
-    const languageName = trimToNull(edition.language?.language);
+    const { language: languageName, languageCode } = languageFromEdition(
+      edition.language
+    );
     if (languageCode) {
       const existing = languageCounts.get(languageCode);
       languageCounts.set(languageCode, {
@@ -2349,6 +2621,8 @@ export async function fetchHardcoverBookFormats(
         name: languageName || existing?.name || languageCode,
       });
     }
+
+    const { country, countryCode } = countryFromEdition(edition.country);
 
     const editionFormat =
       trimToNull(edition.edition_format) || trimToNull(edition.physical_format);
@@ -2373,6 +2647,8 @@ export async function fetchHardcoverBookFormats(
       readingFormat,
       language: languageName,
       languageCode,
+      country,
+      countryCode,
       isbn: trimToNull(edition.isbn_13),
       isbn10: trimToNull(edition.isbn_10),
       asin: trimToNull(edition.asin),

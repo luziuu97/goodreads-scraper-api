@@ -36,6 +36,10 @@ export type NormalizedSearchBook = {
     publicationDate: string | null;
     pages: number | null;
     publisher: string | null;
+    language: string | null;
+    languageCode: string | null;
+    country: string | null;
+    countryCode: string | null;
     cover: string;
   };
 };
@@ -78,6 +82,8 @@ export type NormalizedEditionCover = {
   publisher: string | null;
   language: string | null;
   languageCode: string | null;
+  country: string | null;
+  countryCode: string | null;
   isDefault: boolean;
 };
 

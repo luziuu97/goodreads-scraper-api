@@ -51,6 +51,8 @@ export const getBookFormatsApiResponse = {
       readingFormat: "Ebook",
       language: "English",
       languageCode: "en",
+      country: "United States of America",
+      countryCode: "us",
       isbn: null,
       isbn10: null,
       asin: "B0BGHCXCYB",

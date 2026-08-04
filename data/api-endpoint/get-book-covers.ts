@@ -63,6 +63,8 @@ export const getBookCoversApiResponse = {
       publisher: "Red Tower Books",
       language: "English",
       languageCode: "en",
+      country: "United States of America",
+      countryCode: "us",
       isDefault: true,
     },
   ],

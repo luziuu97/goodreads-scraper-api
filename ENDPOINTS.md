@@ -90,14 +90,38 @@ GET /api/book/details/1662524?provider=hardcover&editionId=32963227
     "title": "...",
     "cover": "...",
     "author": [{ "id": 1, "name": "...", "url": "..." }],
+    "translator": null,
+    "translators": [],
+    "illustrators": [],
+    "narrators": [],
+    "editors": [],
+    "otherContributors": [],
     "rating": "4.50",
     "publishDate": "...",
     "genres": ["..."],
     "isbn": "...",
-    "isbn10": "..."
+    "isbn10": "...",
+    "language": "English",
+    "languageCode": "en",
+    "country": "United States of America",
+    "countryCode": "us",
+    "pages": 517,
+    "publishedBy": "Red Tower Books",
+    "edition": {
+      "id": 32963227,
+      "isbn": "...",
+      "pages": 517,
+      "publisher": "Red Tower Books",
+      "language": "English",
+      "languageCode": "en",
+      "country": "United States of America",
+      "countryCode": "us"
+    }
   }
 }
 ```
+
+When `editionId` is provided (e.g. from an ISBN search hit), edition-specific fields (`pages`, `isbn`, `language`, `country`, `publisher`, `publishDate`, `type`, cover, and role-split contributors) match that edition. Translators, illustrators, narrators, and editors are returned in their own arrays — not mixed into `author`.
 
 Successful details responses are cached for about **14 days**.
 
@@ -156,6 +180,8 @@ GET /api/book/covers/1662524?onlyWithCover=false
       "publisher": "Red Tower Books",
       "language": "English",
       "languageCode": "en",
+      "country": "United States of America",
+      "countryCode": "us",
       "isDefault": true
     }
   ],
@@ -219,6 +245,8 @@ GET /api/book/formats/fourth-wing?format=physical
       "readingFormat": "Ebook",
       "language": "English",
       "languageCode": "en",
+      "country": "United States of America",
+      "countryCode": "us",
       "isbn": null,
       "isbn10": null,
       "asin": "B0BGHCXCYB",

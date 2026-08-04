@@ -93,7 +93,8 @@ export function buildLogicalCacheKey(
     .map((key) => `${key}=${normalizeCachePart(String(parts[key]))}`)
     .join('&');
 
-  return `api:${endpoint}:v1:${sorted}`;
+  // Bump schema version when response shape changes (e.g. language/country/roles).
+  return `api:${endpoint}:v2:${sorted}`;
 }
 
 /**
