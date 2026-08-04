@@ -5,17 +5,18 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/details/:bookId?provider=hardcover"
+  url: "{{url}}/api/book/details/:bookId"
   params:
     - name: provider
       value: hardcover
       type: query
+      disabled: true
     - name: editionId
       value: "32963227"
       type: query
       disabled: true
     - name: bookId
-      value: "1662524"
+      value: "1913404"
       type: path
   auth: inherit
 

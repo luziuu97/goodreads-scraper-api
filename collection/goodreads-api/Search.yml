@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=fourth+wing"
+  url: "{{url}}/api/book/search?query=pioneer summer"
   params:
     - name: query
-      value: fourth wing
+      value: pioneer summer
       type: query
     - name: provider
       value: hardcover
