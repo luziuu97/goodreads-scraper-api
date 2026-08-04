@@ -71,6 +71,8 @@ GET /api/book/search?query=9781649374042&provider=hardcover&type=isbn
 
 When the query matches a translated edition title (or `language` prefers one), `title` / `cover` / `translators` / `edition` come from that edition. `workTitle` stays the canonical work title. `presentation` is `work` \| `edition` \| `isbn`. Use `edition.id` with book details (`editionId=…`) to open that exact version. Descriptions still come from work-level details when the edition has no separate summary.
 
+Results are re-ranked for quality: text match and title similarity are balanced with Hardcover popularity (`users_count` / ratings) and completeness (author, cover, rating), so empty catalog shells with an exact title do not outrank well-known editions.
+
 Empty search results are not cached. Successful non-empty results are cached for about **1 day**.
 
 ---

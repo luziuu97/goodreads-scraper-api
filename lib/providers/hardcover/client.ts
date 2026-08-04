@@ -18,6 +18,9 @@ type HardcoverSearchResult = {
   alternative_titles?: string[] | null;
   author_names?: string[];
   rating?: number;
+  ratings_count?: number;
+  users_count?: number;
+  users_read_count?: number;
   release_date?: string;
   genres?: string[];
   image?: HardcoverImage;
@@ -25,6 +28,8 @@ type HardcoverSearchResult = {
 
 type HardcoverSearchHit = {
   document?: HardcoverSearchResult | null;
+  /** Typesense text relevance score when present. */
+  text_match?: number;
 };
 
 type HardcoverSearchResults = {
@@ -795,6 +800,98 @@ function titleSimilarity(a: string, b: string): number {
   return union > 0 ? intersection / union : 0;
 }
 
+/**
+ * Best title similarity of a query against the work title and known alternatives
+ * (covers translated titles like "El Señor de los Anillos" → "The Lord of the Rings").
+ */
+function bestTitleSimilarity(
+  query: string,
+  title: string,
+  alternativeTitles: string[] | null | undefined
+): number {
+  let best = titleSimilarity(query, title);
+  if (!Array.isArray(alternativeTitles)) {
+    return best;
+  }
+  for (const alt of alternativeTitles) {
+    if (typeof alt === "string" && alt.trim()) {
+      best = Math.max(best, titleSimilarity(query, alt));
+    }
+  }
+  return best;
+}
+
+type RankableSearchBook = {
+  book: HardcoverNormalizedSearchBook;
+  textMatch: number;
+  usersCount: number;
+  ratingsCount: number;
+  usersReadCount: number;
+  titleSim: number;
+  originalIndex: number;
+};
+
+/**
+ * Composite quality score for search hits.
+ *
+ * Typesense often ranks empty catalog shells with an exact translated title
+ * above well-known works that only match via alternative_titles. We re-rank
+ * by text relevance + title similarity + reader popularity + metadata completeness
+ * so "El Señor de los Anillos" surfaces Tolkien rather than a blank entry.
+ */
+function scoreSearchHit(hit: RankableSearchBook, maxTextMatch: number): number {
+  const textRel = maxTextMatch > 0 ? hit.textMatch / maxTextMatch : 1;
+  const users = hit.usersCount;
+  const ratingsCount = hit.ratingsCount;
+  const usersRead = hit.usersReadCount;
+
+  // Log scale so mega-hits outrank shells without totally drowning niche matches.
+  const popularity =
+    Math.log10(users + 1) * 18 +
+    Math.log10(ratingsCount + 1) * 10 +
+    Math.log10(usersRead + 1) * 4;
+
+  const hasAuthor = Boolean(hit.book.author?.trim());
+  const hasCover = Boolean(hit.book.cover);
+  const hasRating =
+    typeof hit.book.rating === "number" &&
+    Number.isFinite(hit.book.rating) &&
+    hit.book.rating > 0;
+
+  let completeness = 0;
+  if (hasAuthor) completeness += 22;
+  if (hasCover) completeness += 12;
+  if (hasRating) completeness += 12;
+  // Empty shells (title only, no readers) should sink hard.
+  if (!hasAuthor && users === 0) completeness -= 50;
+
+  // Tiny stable bias toward Typesense order when scores otherwise tie.
+  const orderBias = Math.max(0, 3 - hit.originalIndex * 0.05);
+
+  return textRel * 40 + hit.titleSim * 35 + popularity + completeness + orderBias;
+}
+
+function rankSearchBooks(
+  hits: RankableSearchBook[],
+  limit: number
+): HardcoverNormalizedSearchBook[] {
+  if (hits.length === 0) {
+    return [];
+  }
+
+  const maxTextMatch = Math.max(...hits.map((hit) => hit.textMatch), 1);
+  return [...hits]
+    .sort((a, b) => {
+      const scoreDiff = scoreSearchHit(b, maxTextMatch) - scoreSearchHit(a, maxTextMatch);
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+      return a.originalIndex - b.originalIndex;
+    })
+    .slice(0, limit)
+    .map((hit) => hit.book);
+}
+
 type EnrichmentEdition = {
   id?: number | null;
   title?: string | null;
@@ -1233,56 +1330,94 @@ export async function searchHardcoverBooks(input: {
   // Author search: skip edition presentation enrichment (titles rarely help).
   const shouldEnrichEditions = effectiveType !== "author";
 
+  // Pull a wider candidate window so quality re-ranking can promote popular
+  // complete works that Typesense buried under empty exact-title shells.
+  const fetchLimit = Math.min(50, Math.max(input.limit * 3, 30));
+
   const data = await hardcoverGraphQLRequest<{
     search: {
       results?: HardcoverSearchResults | null;
     };
   }>(searchQuery, {
     query: effectiveQuery,
-    perPage: input.limit,
+    perPage: fetchLimit,
     page: 1,
     fields: broadFields,
     weights: broadWeights,
   });
 
   const rawHits = Array.isArray(data.search?.results?.hits) ? data.search.results.hits : [];
-  const baseBooks = rawHits
-    .map((hit): HardcoverNormalizedSearchBook | null => {
-      const result = hit.document;
-      const title = typeof result?.title === "string" ? result.title.trim() : "";
-      if (!title) {
-        return null;
-      }
+  const rankableHits: RankableSearchBook[] = [];
 
-      const authorNames = toStringArray(result?.author_names);
-      const genres = toStringArray(result?.genres);
-      const id =
-        typeof result?.id === "number" || typeof result?.id === "string"
-          ? String(result.id)
-          : typeof result?.slug === "string" && result.slug
-            ? result.slug
-            : title;
+  rawHits.forEach((hit, originalIndex) => {
+    const result = hit.document;
+    const title = typeof result?.title === "string" ? result.title.trim() : "";
+    if (!title) {
+      return;
+    }
 
-      return {
-        id,
+    const authorNames = toStringArray(result?.author_names);
+    const genres = toStringArray(result?.genres);
+    const id =
+      typeof result?.id === "number" || typeof result?.id === "string"
+        ? String(result.id)
+        : typeof result?.slug === "string" && result.slug
+          ? result.slug
+          : title;
+
+    const ratingRaw = toNumber(result?.rating);
+    // Treat zero / missing ratings as absent so incomplete shells don't look scored.
+    const rating =
+      typeof ratingRaw === "number" && ratingRaw > 0 ? ratingRaw : undefined;
+
+    const book: HardcoverNormalizedSearchBook = {
+      id,
+      title,
+      workTitle: title,
+      author: authorNames.join(", "),
+      cover: toCoverUrl(result?.image || null),
+      rating,
+      publicationDate:
+        typeof result?.release_date === "string" && result.release_date.trim()
+          ? result.release_date
+          : undefined,
+      genres: genres.length > 0 ? genres : undefined,
+      presentation: "work",
+    };
+
+    rankableHits.push({
+      book,
+      textMatch:
+        typeof hit.text_match === "number" && Number.isFinite(hit.text_match)
+          ? hit.text_match
+          : 0,
+      usersCount:
+        typeof result?.users_count === "number" && Number.isFinite(result.users_count)
+          ? Math.max(0, result.users_count)
+          : 0,
+      ratingsCount:
+        typeof result?.ratings_count === "number" && Number.isFinite(result.ratings_count)
+          ? Math.max(0, result.ratings_count)
+          : 0,
+      usersReadCount:
+        typeof result?.users_read_count === "number" &&
+        Number.isFinite(result.users_read_count)
+          ? Math.max(0, result.users_read_count)
+          : 0,
+      titleSim: bestTitleSimilarity(
+        effectiveQuery,
         title,
-        workTitle: title,
-        author: authorNames.join(", "),
-        cover: toCoverUrl(result?.image || null),
-        rating: toNumber(result?.rating),
-        publicationDate:
-          typeof result?.release_date === "string" && result.release_date.trim()
-            ? result.release_date
-            : undefined,
-        genres: genres.length > 0 ? genres : undefined,
-        presentation: "work",
-      };
-    })
-    .filter((book): book is HardcoverNormalizedSearchBook => Boolean(book));
+        result?.alternative_titles ?? null
+      ),
+      originalIndex,
+    });
+  });
+
+  const rankedBooks = rankSearchBooks(rankableHits, input.limit);
 
   const books = shouldEnrichEditions
-    ? await enrichSearchHitsWithEditions(baseBooks, effectiveQuery, languagePref)
-    : baseBooks;
+    ? await enrichSearchHitsWithEditions(rankedBooks, effectiveQuery, languagePref)
+    : rankedBooks;
 
   return {
     totalResults:
