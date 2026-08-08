@@ -249,14 +249,15 @@ function normalizeAuthorizationToken(rawToken: string): string {
 
 async function hardcoverGraphQLRequest<T>(
   query: string,
-  variables: Record<string, unknown>,
-  attempt: number = 1
+  variables: Record<string, unknown>
 ): Promise<T> {
   const token = getHardcoverApiToken();
   if (!token) {
     console.error("[Hardcover GraphQL] Missing HARDCOVER_API_TOKEN in environment variables");
     throw new Error("HARDCOVER_API_TOKEN is required to use provider=hardcover");
   }
+
+  await hardcoverLimiter.acquire();
 
   let response: Response;
   try {
@@ -274,10 +275,10 @@ async function hardcoverGraphQLRequest<T>(
     throw netErr;
   }
 
-  if (response.status === 429 && attempt < 2) {
-    console.warn(`[Hardcover GraphQL] Rate limited (HTTP 429). Retrying in 500ms... (attempt ${attempt})`);
-    await new Promise((res) => setTimeout(res, 500));
-    return hardcoverGraphQLRequest<T>(query, variables, attempt + 1);
+  if (response.status === 429) {
+    const targetQuery = String(variables.query || variables.slug || variables.isbn || "request");
+    console.warn(`[Hardcover GraphQL] Rate limited (HTTP 429) for query: "${targetQuery}"`);
+    throw new Error(`Hardcover request failed with status 429`);
   }
 
   let json: GraphQLResponse<T>;

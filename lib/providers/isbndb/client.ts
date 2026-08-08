@@ -1,3 +1,11 @@
+import { isbndbLimiter } from "@/lib/outgoing-rate-limiter";
+import {
+  buildLogicalCacheKey,
+  CACHE_TTL_DETAILS,
+  CACHE_TTL_SEARCH,
+  getCachedResponse,
+  setCachedResponse,
+} from "@/lib/redis-cache";
 import type {
   BookCoversInput,
   BookDetailsInput,
@@ -115,30 +123,50 @@ export async function searchIsbndb(
   const query = input.query.trim();
   if (!query) return [];
 
-  const headers = getHeaders();
   const limit = Math.min(Math.max(input.limit || 20, 1), 50);
+  const cacheKey = buildLogicalCacheKey("provider:isbndb:search", { query, limit });
+  const cached = await getCachedResponse(cacheKey);
+  if (cached && Array.isArray(cached)) {
+    return cached;
+  }
+
+  const headers = getHeaders();
 
   // If query is an ISBN, try exact book endpoint first
   const isbnClean = cleanIsbn(query);
   if (isbnClean) {
     try {
+      await isbndbLimiter.acquire();
       const res = await fetch(`${ISBNDB_BASE}/book/${encodeURIComponent(isbnClean)}`, {
         headers,
       });
+      if (res.status === 429) {
+        console.warn(`[ISBNDB] Rate limited (HTTP 429) for ISBN query: "${isbnClean}"`);
+        throw new Error("ISBNDB rate limit reached (429)");
+      }
       if (res.ok) {
         const data: ISBNDBBookResponse = await res.json();
         if (data.book) {
-          return [mapIsbndbBookToSearchBook(data.book)];
+          const results = [mapIsbndbBookToSearchBook(data.book)];
+          await setCachedResponse(cacheKey, results, CACHE_TTL_SEARCH);
+          return results;
         }
       }
     } catch (err) {
+      if (err instanceof Error && err.message.includes("429")) throw err;
       console.warn(`[ISBNDB] Exact ISBN lookup failed for ${isbnClean}:`, err);
     }
   }
 
   // General search across ISBNDB books catalog
+  await isbndbLimiter.acquire();
   const searchUrl = `${ISBNDB_BASE}/books/${encodeURIComponent(query)}?page=1&pageSize=${limit}`;
   const res = await fetch(searchUrl, { headers });
+
+  if (res.status === 429) {
+    console.warn(`[ISBNDB] Rate limited (HTTP 429) for query: "${query}"`);
+    throw new Error("ISBNDB rate limit reached (429)");
+  }
 
   if (!res.ok) {
     if (res.status === 404) return [];
@@ -147,17 +175,30 @@ export async function searchIsbndb(
 
   const data: ISBNDBSearchResponse = await res.json();
   const rawBooks = data.books || [];
-  return rawBooks.map(mapIsbndbBookToSearchBook);
+  const results = rawBooks.map(mapIsbndbBookToSearchBook);
+  await setCachedResponse(cacheKey, results, CACHE_TTL_SEARCH);
+  return results;
 }
 
 export async function getIsbndbBookDetails(
   input: BookDetailsInput
 ): Promise<NormalizedBookDetailsResponse> {
   const slug = input.slug.trim();
-  const headers = getHeaders();
+  const cacheKey = buildLogicalCacheKey("provider:isbndb:details", { slug });
+  const cached = await getCachedResponse(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
+  const headers = getHeaders();
+  await isbndbLimiter.acquire();
   const url = `${ISBNDB_BASE}/book/${encodeURIComponent(slug)}`;
   const res = await fetch(url, { headers });
+
+  if (res.status === 429) {
+    console.warn(`[ISBNDB] Rate limited (HTTP 429) for book details slug: "${slug}"`);
+    throw new Error("ISBNDB rate limit reached (429)");
+  }
 
   if (!res.ok) {
     throw new Error(`ISBNDB book details API error (${res.status}) for slug "${slug}"`);
@@ -177,7 +218,7 @@ export async function getIsbndbBookDetails(
     ? b.authors.join(", ")
     : "Unknown Author";
 
-  return {
+  const response: NormalizedBookDetailsResponse = {
     success: true,
     provider: "isbndb",
     scrapedURL: url,
@@ -199,6 +240,9 @@ export async function getIsbndbBookDetails(
       language: b.language || null,
     },
   };
+
+  await setCachedResponse(cacheKey, response, CACHE_TTL_DETAILS);
+  return response;
 }
 
 export async function getIsbndbCovers(

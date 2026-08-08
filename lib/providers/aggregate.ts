@@ -164,10 +164,15 @@ export async function searchAggregate(
           ? result.reason
           : new Error(String(result.reason));
       lastError = err;
-      console.error(
-        `[SearchAggregate] Provider "${provider.id}" search failed for query "${input.query}":`,
-        err
-      );
+      if (err.message.includes("429")) {
+        console.warn(
+          `[SearchAggregate] Provider "${provider.id}" rate limited (429) for query "${input.query}"`
+        );
+      } else {
+        console.error(
+          `[SearchAggregate] Provider "${provider.id}" search failed for query "${input.query}": ${err.message}`
+        );
+      }
     }
   }
 

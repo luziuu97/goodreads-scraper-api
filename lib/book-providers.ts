@@ -169,10 +169,99 @@ export async function batchSearchBooksByProvider(input: {
     }
   }
 
-  // 2. Process cache misses with max concurrency limit of 5
+  // 1.5. Try resolving local database hits for cache misses (e.g. ISBNs already stored in Prisma DB)
+  const remainingMisses: ProcessableItem[] = [];
+  await Promise.all(
+    cacheMisses.map(async (miss) => {
+      const cleanIsbnStr = miss.query.replace(/[^0-9X]/gi, "").trim();
+      const isIsbnQuery = cleanIsbnStr.length === 10 || cleanIsbnStr.length === 13;
+      if (isIsbnQuery) {
+        try {
+          const dbEd = await prisma.edition.findFirst({
+            where: {
+              OR: [
+                { isbn13: cleanIsbnStr },
+                { isbn10: cleanIsbnStr },
+                { asin: cleanIsbnStr },
+              ],
+            },
+            include: {
+              work: {
+                include: {
+                  author: true,
+                  genres: { include: { genre: true } },
+                },
+              },
+              covers: true,
+            },
+          });
+
+          if (dbEd) {
+            const defaultCover = dbEd.covers.find((c) => c.isDefault) || dbEd.covers[0];
+            const searchBook = {
+              id: dbEd.work.id,
+              provider: "canonical" as any,
+              title: dbEd.title || dbEd.work.canonicalTitle,
+              workTitle: dbEd.work.canonicalTitle,
+              author: dbEd.work.author?.name || "Unknown Author",
+              cover: defaultCover?.url || "",
+              rating: dbEd.work.averageRating ?? undefined,
+              publicationDate: dbEd.publicationDate || (dbEd.work.publicationYear ? String(dbEd.work.publicationYear) : undefined),
+              genres: dbEd.work.genres.map((g) => g.genre.name),
+              isbn: dbEd.isbn13 || dbEd.isbn10 || null,
+              isbn10: dbEd.isbn10 || null,
+              language: dbEd.language || null,
+              presentation: "isbn",
+              edition: {
+                id: 0,
+                title: dbEd.title,
+                isbn: dbEd.isbn13,
+                isbn10: dbEd.isbn10,
+                asin: dbEd.asin,
+                format: dbEd.format,
+                publicationDate: dbEd.publicationDate,
+                pages: dbEd.pages,
+                publisher: dbEd.publisher,
+                language: dbEd.language,
+                languageCode: null,
+                country: null,
+                countryCode: null,
+                cover: defaultCover?.url || "",
+              },
+            };
+
+            const responseData = {
+              success: true,
+              provider: "aggregate",
+              results: {
+                query: miss.query,
+                totalResults: 1,
+                books: [searchBook],
+              },
+            };
+
+            results[miss.index] = {
+              index: miss.index,
+              query: miss.query,
+              success: true,
+              books: [searchBook],
+            };
+
+            await setCachedResponse(miss.cacheKey, responseData, CACHE_TTL_SEARCH);
+            return;
+          }
+        } catch {
+          // Ignore DB lookup error and proceed to provider fetch
+        }
+      }
+      remainingMisses.push(miss);
+    })
+  );
+
+  // 2. Process remaining cache misses with max concurrency limit of 5
   const CONCURRENCY_LIMIT = 5;
-  for (let i = 0; i < cacheMisses.length; i += CONCURRENCY_LIMIT) {
-    const chunk = cacheMisses.slice(i, i + CONCURRENCY_LIMIT);
+  for (let i = 0; i < remainingMisses.length; i += CONCURRENCY_LIMIT) {
+    const chunk = remainingMisses.slice(i, i + CONCURRENCY_LIMIT);
     await Promise.all(
       chunk.map(async (miss) => {
         try {

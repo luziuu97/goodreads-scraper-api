@@ -37,6 +37,8 @@ export type RawProviderBookInput = {
 };
 
 async function safeUpsertAuthor(name: string, slug: string) {
+  const existing = await prisma.author.findUnique({ where: { slug } });
+  if (existing) return existing;
   try {
     return await prisma.author.upsert({
       where: { slug },
@@ -45,14 +47,16 @@ async function safeUpsertAuthor(name: string, slug: string) {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      const existing = await prisma.author.findUnique({ where: { slug } });
-      if (existing) return existing;
+      const reFound = await prisma.author.findUnique({ where: { slug } });
+      if (reFound) return reFound;
     }
     throw err;
   }
 }
 
 async function safeUpsertSeries(name: string, slug: string) {
+  const existing = await prisma.series.findUnique({ where: { slug } });
+  if (existing) return existing;
   try {
     return await prisma.series.upsert({
       where: { slug },
@@ -61,14 +65,16 @@ async function safeUpsertSeries(name: string, slug: string) {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      const existing = await prisma.series.findUnique({ where: { slug } });
-      if (existing) return existing;
+      const reFound = await prisma.series.findUnique({ where: { slug } });
+      if (reFound) return reFound;
     }
     throw err;
   }
 }
 
 async function safeUpsertGenre(name: string) {
+  const existing = await prisma.genre.findUnique({ where: { name } });
+  if (existing) return existing;
   try {
     return await prisma.genre.upsert({
       where: { name },
@@ -77,8 +83,8 @@ async function safeUpsertGenre(name: string) {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      const existing = await prisma.genre.findUnique({ where: { name } });
-      if (existing) return existing;
+      const reFound = await prisma.genre.findUnique({ where: { name } });
+      if (reFound) return reFound;
     }
     throw err;
   }
