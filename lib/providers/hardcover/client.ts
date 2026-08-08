@@ -1,4 +1,5 @@
 import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
+import { hardcoverLimiter } from "@/lib/outgoing-rate-limiter";
 
 const HARDCOVER_GRAPHQL_URL = "https://api.hardcover.app/v1/graphql";
 
