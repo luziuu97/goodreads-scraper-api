@@ -249,7 +249,8 @@ function normalizeAuthorizationToken(rawToken: string): string {
 
 async function hardcoverGraphQLRequest<T>(
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  attempt: number = 1
 ): Promise<T> {
   const token = getHardcoverApiToken();
   if (!token) {
@@ -271,6 +272,12 @@ async function hardcoverGraphQLRequest<T>(
   } catch (netErr) {
     console.error(`[Hardcover GraphQL] Network/fetch request failed:`, netErr);
     throw netErr;
+  }
+
+  if (response.status === 429 && attempt < 2) {
+    console.warn(`[Hardcover GraphQL] Rate limited (HTTP 429). Retrying in 500ms... (attempt ${attempt})`);
+    await new Promise((res) => setTimeout(res, 500));
+    return hardcoverGraphQLRequest<T>(query, variables, attempt + 1);
   }
 
   let json: GraphQLResponse<T>;

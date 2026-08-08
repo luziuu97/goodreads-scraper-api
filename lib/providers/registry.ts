@@ -9,8 +9,8 @@ import type { BookDataProvider, ProviderId } from "@/lib/providers/types";
  * and append it here. Aggregate will pick it up automatically.
  */
 const ACTIVE_PROVIDERS: BookDataProvider[] = [
-  hardcoverProvider,
   isbndbProvider,
+  hardcoverProvider,
   openLibraryProvider,
 ];
 

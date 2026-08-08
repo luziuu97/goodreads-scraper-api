@@ -9,6 +9,7 @@ import type {
   BookSearchInput,
   NormalizedBookCoversResponse,
   NormalizedBookDetailsResponse,
+  NormalizedEditionCover,
   NormalizedSearchBook,
   NormalizedSearchResponse,
   NormalizedSearchSeries,
@@ -18,6 +19,7 @@ import type {
   SeriesDetailsInput,
   SeriesSearchInput,
 } from "@/lib/providers/types";
+import { getImageDimensions } from "@/lib/utils/image-size";
 
 function normalizeIsbn(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -34,11 +36,39 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
     new Set([...(a.genres ?? []), ...(b.genres ?? [])].filter(Boolean))
   );
 
-  const preferACover = Boolean(a.cover) && a.cover.length >= (b.cover?.length ?? 0);
-
   const translators = Array.from(
     new Set([...(a.translators ?? []), ...(b.translators ?? [])].filter(Boolean))
   );
+
+  // Give preference to ISBNDB data for ISBNs, edition details, publisher, pages, format, title, author
+  const isbndbHit = a.provider === "isbndb" ? a : b.provider === "isbndb" ? b : null;
+  const otherHit = isbndbHit ? (isbndbHit === a ? b : a) : null;
+
+  if (isbndbHit) {
+    const cover = isbndbHit.cover || otherHit?.cover || a.cover || b.cover;
+    return {
+      id: isbndbHit.id || otherHit?.id || a.id,
+      provider: isbndbHit.provider,
+      title: isbndbHit.title || otherHit?.title || a.title,
+      workTitle: isbndbHit.workTitle || otherHit?.workTitle || a.workTitle,
+      author: isbndbHit.author || otherHit?.author || a.author,
+      cover: cover,
+      rating: isbndbHit.rating ?? otherHit?.rating ?? a.rating,
+      publicationDate: isbndbHit.publicationDate || otherHit?.publicationDate || a.publicationDate,
+      genres: genres.length > 0 ? genres.slice(0, 20) : undefined,
+      isbn: isbndbHit.isbn || otherHit?.isbn || null,
+      isbn10: isbndbHit.isbn10 || otherHit?.isbn10 || null,
+      language: isbndbHit.language || otherHit?.language || null,
+      languageCode: isbndbHit.languageCode || otherHit?.languageCode || null,
+      translators: translators.length > 0 ? translators : undefined,
+      presentation: isbndbHit.presentation || otherHit?.presentation || "isbn",
+      confidence: isbndbHit.confidence ?? otherHit?.confidence,
+      sources: Array.from(new Set([...(a.sources ?? []), ...(b.sources ?? [])])),
+      edition: isbndbHit.edition || otherHit?.edition,
+    };
+  }
+
+  const preferACover = Boolean(a.cover) && a.cover.length >= (b.cover?.length ?? 0);
 
   // Prefer the hit that already resolved a language-specific edition presentation.
   const preferAPresentation =
@@ -141,15 +171,27 @@ export async function searchAggregate(
     }
   }
 
-  const merged = dedupeSearchBooks(books).slice(0, input.limit);
+  const merged = dedupeSearchBooks(books);
+
+  // Prioritize ISBNDB hits when searching by ISBN
+  const cleanQueryIsbn = normalizeIsbn(input.query);
+  if (cleanQueryIsbn || input.type === "isbn") {
+    merged.sort((a, b) => {
+      const aIsbndb = a.provider === "isbndb" || a.isbn === cleanQueryIsbn || a.isbn10 === cleanQueryIsbn ? 1 : 0;
+      const bIsbndb = b.provider === "isbndb" || b.isbn === cleanQueryIsbn || b.isbn10 === cleanQueryIsbn ? 1 : 0;
+      return bIsbndb - aIsbndb;
+    });
+  }
+
+  const finalBooks = merged.slice(0, input.limit);
 
   // If every provider failed and we have no books, surface the error.
-  if (merged.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {
+  if (finalBooks.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {
     throw lastError;
   }
 
   // Ingest hits into Prisma Canonical Store in background / read-through
-  for (const b of merged) {
+  for (const b of finalBooks) {
     upsertCanonicalWorkFromProvider({
       provider: b.provider,
       providerWorkId: b.id,
@@ -172,8 +214,8 @@ export async function searchAggregate(
     provider: "aggregate",
     results: {
       query: input.query,
-      totalResults: merged.length,
-      books: merged,
+      totalResults: finalBooks.length,
+      books: finalBooks,
     },
   };
 }
@@ -342,21 +384,122 @@ export async function getCoversAggregate(
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
-  const errors: Error[] = [];
+  const settled = await Promise.allSettled(providers.map((p) => p.getCovers(input)));
 
-  for (const provider of providers) {
-    try {
-      const covers = await provider.getCovers(input);
-      return {
-        ...covers,
-        provider: "aggregate",
-      };
-    } catch (error) {
-      errors.push(error instanceof Error ? error : new Error(String(error)));
+  const allCovers: NormalizedEditionCover[] = [];
+  let primaryBookInfo = {
+    id: input.slug,
+    slug: input.slug,
+    title: input.slug,
+    provider: "aggregate" as ProviderId,
+  };
+  let scrapedURL = `aggregate://${input.slug}`;
+  let totalEditionsCount = 0;
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i];
+    if (result.status === "fulfilled") {
+      const res = result.value;
+      if (res.book) {
+        primaryBookInfo = {
+          id: res.book.id || primaryBookInfo.id,
+          slug: res.book.slug || primaryBookInfo.slug,
+          title: res.book.title || primaryBookInfo.title,
+          provider: res.book.provider || primaryBookInfo.provider,
+        };
+        scrapedURL = res.scrapedURL || scrapedURL;
+      }
+      totalEditionsCount += res.totalEditions || 0;
+      allCovers.push(...res.covers);
+    } else {
+      lastError =
+        result.reason instanceof Error
+          ? result.reason
+          : new Error(String(result.reason));
     }
   }
 
-  throw errors[0] || new Error("No provider could resolve book covers");
+  if (allCovers.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {
+    throw lastError;
+  }
+
+  const seenUrls = new Set<string>();
+  const uniqueCovers: NormalizedEditionCover[] = [];
+  for (const c of allCovers) {
+    if (!c.url || seenUrls.has(c.url.trim())) continue;
+    seenUrls.add(c.url.trim());
+    uniqueCovers.push(c);
+  }
+
+  const processedCovers = await Promise.all(
+    uniqueCovers.map(async (cover, index) => {
+      let w = cover.width;
+      let h = cover.height;
+      let px = cover.pixelCount;
+      let format = cover.format;
+      let ratio = cover.ratio;
+
+      if (!w || !h || !px) {
+        const measured = await getImageDimensions(cover.url);
+        if (measured.width && measured.height) {
+          w = measured.width;
+          h = measured.height;
+          px = measured.pixelCount;
+          format = measured.format || format;
+          ratio = w / h;
+        }
+      }
+
+      return {
+        ...cover,
+        editionId: index + 1,
+        width: w,
+        height: h,
+        pixelCount: px,
+        format: format,
+        ratio: ratio || (w && h ? w / h : null),
+        isDefault: false,
+      };
+    })
+  );
+
+  const scored = processedCovers.map((c) => {
+    const px = c.pixelCount || (c.width && c.height ? c.width * c.height : 0);
+    const r = c.ratio || (c.width && c.height ? c.width / c.height : 0);
+    const isBookRatio = r >= 0.5 && r <= 0.85;
+    const score = px + (isBookRatio ? 2000 : 0);
+    return { cover: c, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const rankedCovers = scored.map((item, idx) => ({
+    ...item.cover,
+    isDefault: idx === 0,
+  }));
+
+  const bestByResolution =
+    rankedCovers.length > 0 && rankedCovers[0].url
+      ? {
+          editionId: rankedCovers[0].editionId,
+          url: rankedCovers[0].url,
+          width: rankedCovers[0].width,
+          height: rankedCovers[0].height,
+          pixelCount: rankedCovers[0].pixelCount,
+        }
+      : null;
+
+  return {
+    success: true,
+    provider: "aggregate",
+    scrapedURL,
+    book: primaryBookInfo,
+    covers: rankedCovers,
+    bestByResolution,
+    totalCovers: rankedCovers.length,
+    totalEditions: Math.max(totalEditionsCount, rankedCovers.length),
+  };
 }
 
 export async function getCoversByProviderId(
