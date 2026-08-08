@@ -15,6 +15,10 @@ http:
       value: "32963227"
       type: query
       disabled: true
+    - name: reviews
+      value: "false"
+      type: query
+      disabled: true
     - name: bookId
       value: "1913404"
       type: path

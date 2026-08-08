@@ -3,7 +3,7 @@
  * Add new provider ids to ProviderId as they are implemented and registered.
  */
 
-export type ProviderId = "hardcover";
+export type ProviderId = "hardcover" | "openlibrary" | "isbndb";
 
 /** Dispatch modes accepted by the public API (includes virtual aggregate). */
 export type BookProviderMode = "aggregate" | ProviderId;

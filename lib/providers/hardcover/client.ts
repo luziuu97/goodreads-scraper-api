@@ -253,25 +253,45 @@ async function hardcoverGraphQLRequest<T>(
 ): Promise<T> {
   const token = getHardcoverApiToken();
   if (!token) {
+    console.error("[Hardcover GraphQL] Missing HARDCOVER_API_TOKEN in environment variables");
     throw new Error("HARDCOVER_API_TOKEN is required to use provider=hardcover");
   }
 
-  const response = await fetch(HARDCOVER_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": API_CONFIG.userAgent,
-      authorization: normalizeAuthorizationToken(token),
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(HARDCOVER_GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": API_CONFIG.userAgent,
+        authorization: normalizeAuthorizationToken(token),
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+  } catch (netErr) {
+    console.error(`[Hardcover GraphQL] Network/fetch request failed:`, netErr);
+    throw netErr;
+  }
 
-  const json = (await response.json()) as GraphQLResponse<T>;
+  let json: GraphQLResponse<T>;
+  try {
+    json = (await response.json()) as GraphQLResponse<T>;
+  } catch (parseErr) {
+    console.error(
+      `[Hardcover GraphQL] Invalid JSON response from Hardcover (HTTP ${response.status}):`,
+      parseErr
+    );
+    throw new Error(`Hardcover returned unparseable response with status ${response.status}`);
+  }
 
   if (!response.ok) {
     const message =
       json.errors?.map((error) => error.message).filter(Boolean).join("; ") ||
       `Hardcover request failed with status ${response.status}`;
+    console.error(`[Hardcover GraphQL] HTTP ${response.status} Error: ${message}`, {
+      variables,
+      errors: json.errors,
+    });
     throw new Error(message);
   }
 
@@ -280,10 +300,15 @@ async function hardcoverGraphQLRequest<T>(
       .map((error) => error.message)
       .filter(Boolean)
       .join("; ");
+    console.error(`[Hardcover GraphQL] Query Errors: ${message}`, {
+      variables,
+      errors: json.errors,
+    });
     throw new Error(message || "Hardcover GraphQL request failed");
   }
 
   if (!json.data) {
+    console.error(`[Hardcover GraphQL] Missing data field in response`, { variables });
     throw new Error("Hardcover GraphQL response did not include data");
   }
 

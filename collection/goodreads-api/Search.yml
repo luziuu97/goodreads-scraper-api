@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=pioneer summer"
+  url: "{{url}}/api/book/search"
   params:
     - name: query
       value: pioneer summer
@@ -15,11 +15,15 @@ http:
       type: query
       disabled: true
     - name: type
-      value: isbn
+      value: all
       type: query
       disabled: true
     - name: limit
       value: "10"
+      type: query
+      disabled: true
+    - name: language
+      value: en
       type: query
       disabled: true
   auth: inherit

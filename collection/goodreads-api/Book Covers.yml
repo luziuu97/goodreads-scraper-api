@@ -5,11 +5,12 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/covers/:bookId?provider=hardcover"
+  url: "{{url}}/api/book/covers/:bookId"
   params:
     - name: provider
       value: hardcover
       type: query
+      disabled: true
     - name: limit
       value: "50"
       type: query

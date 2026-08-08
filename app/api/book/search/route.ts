@@ -19,9 +19,21 @@ function hasSearchResults(response: NormalizedSearchResponse): boolean {
 }
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now();
+  let query: string | null = null;
+  let providerStr: string | null = null;
+  let type: string = "all";
+  let limit: number = 10;
+  let language: string | undefined = undefined;
+
   try {
     await API_CONFIG.publicRateLimit.check(req, "search_books");
   } catch {
+    console.warn(`[API /api/book/search] 429 Rate limit exceeded:`, {
+      url: req.url,
+      ip: req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown",
+      userAgent: req.headers.get("user-agent"),
+    });
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
       { status: 429 }
@@ -33,7 +45,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const query = searchParams.get("query");
+    query = searchParams.get("query");
     if (!query || query.trim() === "") {
       return NextResponse.json(
         { error: "Query parameter is required" },
@@ -41,9 +53,10 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const provider = parseProvider(searchParams.get("provider"));
+    providerStr = searchParams.get("provider");
+    const provider = parseProvider(providerStr);
 
-    const type = searchParams.get("type") || "all";
+    type = searchParams.get("type") || "all";
     const validTypes = ["all", "title", "author", "isbn"];
     if (!validTypes.includes(type)) {
       return NextResponse.json(
@@ -55,7 +68,7 @@ export async function GET(req: NextRequest) {
     }
 
     const limitParam = searchParams.get("limit");
-    const limit = limitParam
+    limit = limitParam
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 50)
       : 10;
 
@@ -67,7 +80,7 @@ export async function GET(req: NextRequest) {
     }
 
     const languageParam = searchParams.get("language");
-    const language = languageParam?.trim() || undefined;
+    language = languageParam?.trim() || undefined;
     if (language) {
       const code = language.toLowerCase().split(/[-_]/)[0] || "";
       if (!/^[a-z]{2,3}$/.test(code)) {
@@ -115,7 +128,9 @@ export async function GET(req: NextRequest) {
 
     return apiResponse;
   } catch (error) {
+    const durationMs = Date.now() - startTime;
     const message = error instanceof Error ? error.message : "Unknown search error";
+    const stack = error instanceof Error ? error.stack : undefined;
     const status =
       message.includes("Invalid provider parameter") ||
       message.includes("Goodreads HTML provider has been removed")
@@ -124,6 +139,13 @@ export async function GET(req: NextRequest) {
             message.includes("No configured book metadata providers")
           ? 503
           : 500;
+
+    console.error(`[API /api/book/search] Error ${status} (${durationMs}ms):`, {
+      url: req.url,
+      params: { query, provider: providerStr, type, limit, language },
+      error: message,
+      stack,
+    });
 
     const errorResponse = NextResponse.json(
       {

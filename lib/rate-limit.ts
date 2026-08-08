@@ -66,6 +66,10 @@ export function rateLimit(_options?: Options) {
     process.env.ABUSE_MAX_REQUESTS_PER_10S || env("ABUSE_MAX_REQUESTS_PER_10S"),
     60
   );
+  const maxBatchPer10s = parsePositiveInt(
+    process.env.ABUSE_MAX_BATCH_PER_10S || env("ABUSE_MAX_BATCH_PER_10S"),
+    5
+  );
   const strictEmptyUa =
     (process.env.ABUSE_STRICT_EMPTY_UA || env("ABUSE_STRICT_EMPTY_UA") || "true")
       .toLowerCase() !== "false";
@@ -119,9 +123,48 @@ export function rateLimit(_options?: Options) {
     });
   }
 
+  function checkBatchAbuse(req: NextRequest, endpoint: ApiEndPointID): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const now = Date.now();
+      const tenSecondBucket = Math.floor(now / 10_000);
+      const clientIp = getClientIp(req);
+      const token = `batch_${endpoint}_${clientIp}`;
+
+      let state = windows.get(token);
+      if (!state) {
+        state = {
+          secondBucket: 0,
+          secondCount: 0,
+          tenSecondBucket,
+          tenSecondCount: 0,
+        };
+      }
+
+      if (state.tenSecondBucket !== tenSecondBucket) {
+        state.tenSecondBucket = tenSecondBucket;
+        state.tenSecondCount = 0;
+      }
+
+      state.tenSecondCount += 1;
+      windows.set(token, state);
+
+      const suspicious = strictEmptyUa && isSuspiciousUserAgent(req);
+      const limit = suspicious ? Math.max(2, Math.floor(maxBatchPer10s / 2)) : maxBatchPer10s;
+
+      if (state.tenSecondCount > limit) {
+        reject();
+        return;
+      }
+
+      resolve();
+    });
+  }
+
   return {
     /** Soft abuse check for public book endpoints */
     check: (req: NextRequest, endpoint: ApiEndPointID) => checkAbuse(req, endpoint),
+    /** Dedicated abuse check for batch endpoints (default: max 5 batch requests per 10s) */
+    checkBatch: (req: NextRequest, endpoint: ApiEndPointID) => checkBatchAbuse(req, endpoint),
     /** Alias kept for call sites that previously used import limits */
     checkImport: (req: NextRequest, endpoint: ApiEndPointID) => checkAbuse(req, endpoint),
   };

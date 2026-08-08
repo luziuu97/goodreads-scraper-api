@@ -1,0 +1,44 @@
+info:
+  name: Batch Search
+  type: http
+  seq: 7
+
+http:
+  method: POST
+  url: "{{url}}/api/book/batch-search"
+  headers:
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "provider": "aggregate",
+        "items": [
+          {
+            "query": "Dune",
+            "type": "all",
+            "limit": 5,
+            "language": "en"
+          },
+          {
+            "isbn": "9780441172719",
+            "type": "isbn",
+            "limit": 1
+          },
+          {
+            "title": "Foundation",
+            "author": "Isaac Asimov",
+            "type": "all",
+            "limit": 3,
+            "language": "en"
+          }
+        ]
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

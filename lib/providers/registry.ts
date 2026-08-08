@@ -1,4 +1,6 @@
 import { hardcoverProvider } from "@/lib/providers/hardcover";
+import { isbndbProvider } from "@/lib/providers/isbndb";
+import { openLibraryProvider } from "@/lib/providers/openlibrary";
 import type { BookDataProvider, ProviderId } from "@/lib/providers/types";
 
 /**
@@ -6,7 +8,11 @@ import type { BookDataProvider, ProviderId } from "@/lib/providers/types";
  * To add a provider: implement BookDataProvider under lib/providers/<name>/
  * and append it here. Aggregate will pick it up automatically.
  */
-const ACTIVE_PROVIDERS: BookDataProvider[] = [hardcoverProvider];
+const ACTIVE_PROVIDERS: BookDataProvider[] = [
+  hardcoverProvider,
+  isbndbProvider,
+  openLibraryProvider,
+];
 
 export function listProviders(): BookDataProvider[] {
   return [...ACTIVE_PROVIDERS];

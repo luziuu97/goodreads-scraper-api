@@ -1,0 +1,133 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Work {
+  id               String            @id @default(uuid())
+  slug             String            @unique
+  canonicalTitle   String
+  originalLanguage String            @default("en")
+  publicationYear  Int?
+  averageRating    Float?
+  ratingsCount     Int?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  authorId         String?
+  author           Author?           @relation(fields: [authorId], references: [id])
+
+  seriesId         String?
+  series           Series?           @relation(fields: [seriesId], references: [id])
+  seriesPosition   Float?
+
+  translations     WorkTranslation[]
+  editions         Edition[]
+  genres           GenreOnWork[]
+  providerMappings ProviderMapping[]
+}
+
+model WorkTranslation {
+  id          String  @id @default(uuid())
+  workId      String
+  work        Work    @relation(fields: [workId], references: [id], onDelete: Cascade)
+  language    String
+  title       String
+  description String?
+
+  @@unique([workId, language])
+}
+
+model Series {
+  id            String              @id @default(uuid())
+  slug          String              @unique
+  canonicalName String
+  booksCount    Int?
+  translations  SeriesTranslation[]
+  works         Work[]
+}
+
+model SeriesTranslation {
+  id          String  @id @default(uuid())
+  seriesId    String
+  series      Series  @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  language    String
+  name        String
+  description String?
+
+  @@unique([seriesId, language])
+}
+
+model Author {
+  id    String @id @default(uuid())
+  name  String
+  slug  String @unique
+  works Work[]
+}
+
+model Edition {
+  id              String         @id @default(uuid())
+  workId          String
+  work            Work           @relation(fields: [workId], references: [id], onDelete: Cascade)
+  title           String
+  format          String         @default("OTHER")
+  language        String         @default("en")
+  isbn10          String?
+  isbn13          String?
+  asin            String?
+  publisher       String?
+  publicationDate String?
+  pages           Int?
+  isDefault       Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  covers          EditionCover[]
+  providerMappings ProviderMapping[]
+}
+
+model EditionCover {
+  id          String   @id @default(uuid())
+  editionId   String
+  edition     Edition  @relation(fields: [editionId], references: [id], onDelete: Cascade)
+  provider    String
+  url         String
+  width       Int?
+  height      Int?
+  pixelCount  Int?
+  imageFormat String?  @default("jpeg")
+  isDefault   Boolean  @default(false)
+}
+
+model Genre {
+  id    String        @id @default(uuid())
+  name  String        @unique
+  works GenreOnWork[]
+}
+
+model GenreOnWork {
+  workId  String
+  work    Work   @relation(fields: [workId], references: [id], onDelete: Cascade)
+  genreId String
+  genre   Genre  @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([workId, genreId])
+}
+
+model ProviderMapping {
+  id                String   @id @default(uuid())
+  provider          String
+  providerWorkId    String?
+  providerEditionId String?
+  workId            String
+  work              Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
+  editionId         String?
+  edition           Edition? @relation(fields: [editionId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerWorkId])
+  @@unique([provider, providerEditionId])
+}

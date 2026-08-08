@@ -86,6 +86,7 @@ export async function GET(req: NextRequest) {
     return apiResponse;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown series search error";
+    const stack = error instanceof Error ? error.stack : undefined;
     const status =
       message.includes("Invalid provider parameter") ||
       message.includes("Goodreads HTML provider has been removed")
@@ -94,6 +95,12 @@ export async function GET(req: NextRequest) {
             message.includes("No configured book metadata providers")
           ? 503
           : 500;
+
+    console.error(`[API /api/series/search] Error ${status}:`, {
+      url: req.url,
+      error: message,
+      stack,
+    });
 
     const errorResponse = NextResponse.json(
       {

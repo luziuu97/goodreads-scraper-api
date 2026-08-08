@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/series/search?query=The Empyrean&provider=hardcover"
+  url: "{{url}}/api/series/search"
   params:
     - name: query
       value: The Empyrean
@@ -13,6 +13,7 @@ http:
     - name: provider
       value: hardcover
       type: query
+      disabled: true
     - name: limit
       value: "10"
       type: query

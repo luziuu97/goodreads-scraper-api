@@ -29,12 +29,13 @@ Author, user, reviews, lists, and quotes endpoints that depended on Goodreads HT
 
 | Provider | Status | Notes |
 |----------|--------|--------|
-| `aggregate` (default) | Active | Runs all registered structured providers and merges results. Currently = Hardcover. |
+| `aggregate` (default) | Active | Runs all registered structured providers in parallel and merges results (Hardcover + Open Library). |
 | `hardcover` | Active | Hardcover GraphQL API. Requires `HARDCOVER_API_TOKEN`. |
+| `openlibrary` | Active | Open Library REST API. Public open catalog (no API token required). |
 | `goodreads` | Removed | Returns **400** with a deprecation message. |
-| Open Library / Google Books / OpenAI | Not registered | Folder structure supports adding them later under `lib/providers/`. |
+| Google Books / OpenAI | Not registered | Folder structure supports adding them under `lib/providers/`. |
 
-When **no** `provider` query param is passed, the API uses **aggregate**. When `provider=hardcover` is set, only Hardcover is used.
+When **no** `provider` query param is passed, the API uses **aggregate**. When `provider=hardcover` or `provider=openlibrary` is set, only that provider is used.
 
 ## Quick Start
 

@@ -102,12 +102,15 @@ function ensureProvidersConfigured(): void {
 
   const available = listAvailableProviders();
   if (available.length === 0) {
-    // Today only Hardcover is registered — surface config clearly.
     throw new Error(
-      "HARDCOVER_API_TOKEN is required. No configured book metadata providers are available."
+      "No configured book metadata providers are available."
     );
   }
 }
+
+import { upsertCanonicalWorkFromProvider, getRankedTopEditions } from "@/lib/canonical/merger";
+import { resolveCanonicalByIsbn, resolveCanonicalByProviderWorkId } from "@/lib/canonical/resolver";
+import { prisma } from "@/lib/db";
 
 export async function searchAggregate(
   input: BookSearchInput
@@ -120,14 +123,21 @@ export async function searchAggregate(
   const books: NormalizedSearchBook[] = [];
   let lastError: Error | null = null;
 
-  for (const result of settled) {
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i];
+    const provider = providers[i];
     if (result.status === "fulfilled") {
       books.push(...result.value);
     } else {
-      lastError =
+      const err =
         result.reason instanceof Error
           ? result.reason
           : new Error(String(result.reason));
+      lastError = err;
+      console.error(
+        `[SearchAggregate] Provider "${provider.id}" search failed for query "${input.query}":`,
+        err
+      );
     }
   }
 
@@ -136,6 +146,25 @@ export async function searchAggregate(
   // If every provider failed and we have no books, surface the error.
   if (merged.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {
     throw lastError;
+  }
+
+  // Ingest hits into Prisma Canonical Store in background / read-through
+  for (const b of merged) {
+    upsertCanonicalWorkFromProvider({
+      provider: b.provider,
+      providerWorkId: b.id,
+      title: b.title,
+      originalTitle: b.workTitle,
+      authorName: b.author,
+      language: b.languageCode || b.language || input.language,
+      publicationDate: b.publicationDate,
+      isbn10: b.isbn10 || b.edition?.isbn10,
+      isbn13: b.isbn || b.edition?.isbn,
+      asin: b.edition?.asin,
+      coverUrl: b.cover || b.edition?.cover,
+      rating: b.rating,
+      genres: b.genres,
+    }).catch((err) => console.error("Canonical background ingest error:", err));
   }
 
   return {
@@ -154,18 +183,94 @@ export async function getDetailsAggregate(
 ): Promise<NormalizedBookDetailsResponse> {
   ensureProvidersConfigured();
 
+  // 1. Try exact ISBN resolution
+  const resolvedIsbn = await resolveCanonicalByIsbn(input.slug);
+  if (resolvedIsbn) {
+    const work = await prisma.work.findUnique({
+      where: { id: resolvedIsbn.workId },
+      include: {
+        author: true,
+        series: { include: { translations: true } },
+        translations: true,
+        editions: { include: { covers: true } },
+        genres: { include: { genre: true } },
+      },
+    });
+
+    if (work) {
+      const topEditions = getRankedTopEditions(work.editions);
+      const matchedEdition = work.editions.find((e: any) => e.id === resolvedIsbn.editionId) || work.editions[0];
+
+      return {
+        success: true,
+        provider: "aggregate",
+        scrapedURL: `canonical://work/${work.id}`,
+        book: {
+          id: work.id,
+          slug: work.slug,
+          title: work.canonicalTitle,
+          author: work.author?.name || "Unknown Author",
+          rating: work.averageRating,
+          ratingsCount: work.ratingsCount,
+          publicationYear: work.publicationYear,
+          genres: work.genres.map((g: any) => g.genre.name),
+          matchedEdition: matchedEdition ? {
+            id: matchedEdition.id,
+            isbn13: matchedEdition.isbn13,
+            isbn10: matchedEdition.isbn10,
+            asin: matchedEdition.asin,
+            format: matchedEdition.format,
+            language: matchedEdition.language,
+            publisher: matchedEdition.publisher,
+            covers: matchedEdition.covers,
+          } : null,
+          topEditions,
+          translations: work.translations,
+        },
+      };
+    }
+  }
+
+  // 2. Provider Fetch Fallback
   const providers = listAvailableProviders();
   const errors: Error[] = [];
 
   for (const provider of providers) {
     try {
       const details = await provider.getDetails(input);
+
+      // Ingest into Prisma Canonical store
+      const b: any = details.book;
+      if (b) {
+        upsertCanonicalWorkFromProvider({
+          provider: provider.id,
+          providerWorkId: String(b.id || input.slug),
+          title: String(b.title || ""),
+          originalTitle: b.originalTitle || b.workTitle,
+          authorName: typeof b.author === "string" ? b.author : b.author?.name,
+          description: b.description,
+          publicationYear: b.publicationYear || b.originalPublicationYear,
+          publicationDate: b.publicationDate,
+          publisher: b.publisher,
+          pages: b.pages || b.numberOfPages,
+          isbn10: b.isbn10,
+          isbn13: b.isbn13 || b.isbn,
+          asin: b.asin,
+          format: b.format,
+          coverUrl: b.coverUrl || b.cover || b.image,
+          rating: b.rating || b.averageRating,
+          ratingsCount: b.ratingsCount,
+          genres: b.genres,
+          seriesName: b.series?.name || b.seriesName,
+          seriesPosition: b.series?.position || b.seriesPosition,
+        }).catch((err) => console.error("Canonical detail ingest error:", err));
+      }
+
       return {
         ...details,
         provider: "aggregate",
         book: {
           ...details.book,
-          // keep originating provider on the book object
         },
       };
     } catch (error) {
@@ -192,16 +297,24 @@ export async function searchByProviderId(
     );
   }
 
-  const books = await provider.search(input);
-  return {
-    success: true,
-    provider: providerId,
-    results: {
-      query: input.query,
-      totalResults: books.length,
-      books: books.slice(0, input.limit),
-    },
-  };
+  try {
+    const books = await provider.search(input);
+    return {
+      success: true,
+      provider: providerId,
+      results: {
+        query: input.query,
+        totalResults: books.length,
+        books: books.slice(0, input.limit),
+      },
+    };
+  } catch (error) {
+    console.error(
+      `[SearchByProviderId] Provider "${providerId}" search failed for query "${input.query}":`,
+      error
+    );
+    throw error;
+  }
 }
 
 export async function getDetailsByProviderId(

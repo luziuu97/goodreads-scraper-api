@@ -13,8 +13,8 @@ export const getBookCoversApiParameters: Parameter[] = [
     type: "select",
     required: false,
     description:
-      "Book data source. Omit or use aggregate for multi-source default (currently Hardcover). Explicit hardcover pins to that provider.",
-    options: ["aggregate", "hardcover"],
+      "Book data source. Omit or use aggregate for multi-source default (Hardcover, ISBNDB, OpenLibrary). Explicit provider pins to that source.",
+    options: ["aggregate", "hardcover", "isbndb", "openlibrary"],
   },
   {
     name: "limit",

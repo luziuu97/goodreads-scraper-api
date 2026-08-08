@@ -62,6 +62,7 @@ export type ApiEndPointID =
   | "get_book_covers"
   | "get_book_formats"
   | "search_books"
+  | "batch_search_books"
   | "search_series"
   | "get_series_details";
 

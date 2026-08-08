@@ -110,6 +110,7 @@ export async function GET(
     return apiResponse;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    const stack = error instanceof Error ? error.stack : undefined;
     const status =
       message.includes("Invalid provider parameter") ||
       message.includes("Invalid onlyWithCover parameter") ||
@@ -122,6 +123,12 @@ export async function GET(
           : message.includes("No Hardcover book found")
             ? 404
             : 500;
+
+    console.error(`[API /api/book/covers] Error ${status}:`, {
+      url: req.url,
+      error: message,
+      stack,
+    });
 
     const errorResponse = NextResponse.json(
       {

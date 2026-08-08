@@ -1,6 +1,6 @@
 # API Endpoints
 
-Structured book metadata API. Goodreads HTML scraping has been removed from book routes. Default mode is **aggregate** (all registered providers; currently **Hardcover** only).
+Structured book metadata API. Goodreads HTML scraping has been removed from book routes. Default mode is **aggregate** (all registered providers: **Hardcover**, **ISBNDB**, and **OpenLibrary**).
 
 ## Base URL
 
@@ -19,8 +19,10 @@ Search for books by title, author, or ISBN.
   - `language` (optional): ISO code (`en`, `es`, …) — prefer editions in that language for presentation (title/cover/translator)
   - `limit` (optional): 1–50 (default 10)
   - `provider` (optional):
-    - omit or `aggregate` — multi-source default (registered providers only)
+    - omit or `aggregate` — multi-source default (Hardcover, ISBNDB, OpenLibrary)
     - `hardcover` — Hardcover only
+    - `isbndb` — ISBNDB only
+    - `openlibrary` — OpenLibrary only
     - `goodreads` — **400** (removed)
 
 ### Example
@@ -429,6 +431,96 @@ GET /api/series/41764?provider=hardcover&limit=50&offset=0
 When `language=es`, titles/covers prefer Spanish editions when Hardcover has them (even if the work id is the English book). Compilations and alternate-language translations at the same position are filtered out under the default original-language mode.
 
 Successful series details responses are cached for about **14 days** (cache key includes language/format).
+
+---
+
+## 7. Batch Search Books
+
+Search for up to 50 books in a single `POST` request payload. Ideal for rapid library imports (e.g. Goodreads CSV exports).
+
+- **Endpoint**: `POST /api/book/batch-search`
+- **Headers**: `Content-Type: application/json`
+- **Request Body**:
+  - `provider` (optional): `aggregate` (default) \| `hardcover`
+  - `items` (required): Array of search items (1–50 items).
+  - Item fields:
+    - `query` (optional): Search string (title, author, ISBN)
+    - `isbn` (optional): Direct ISBN-10 or ISBN-13 string
+    - `title` (optional): Book title
+    - `author` (optional): Author name
+    - `type` (optional): `all` (default) \| `title` \| `author` \| `isbn`
+    - `limit` (optional): 1–50 (default 10)
+    - `language` (optional): ISO code (`en`, `es`, …)
+
+### Example Request
+
+```json
+POST /api/book/batch-search
+{
+  "provider": "aggregate",
+  "items": [
+    { "query": "Dune", "limit": 5 },
+    { "isbn": "9780441172719" },
+    { "title": "Foundation", "author": "Isaac Asimov" }
+  ]
+}
+```
+
+### Example Response
+
+```json
+{
+  "success": true,
+  "provider": "aggregate",
+  "totalItems": 3,
+  "successfulItems": 3,
+  "failedItems": 0,
+  "results": [
+    {
+      "index": 0,
+      "query": "Dune",
+      "success": true,
+      "books": [
+        {
+          "id": "1662524",
+          "provider": "hardcover",
+          "title": "Dune",
+          "author": "Frank Herbert",
+          "cover": "https://...",
+          "rating": 4.67
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "query": "9780441172719",
+      "success": true,
+      "books": [
+        {
+          "id": "1662524",
+          "provider": "hardcover",
+          "title": "Dune",
+          "author": "Frank Herbert",
+          "cover": "https://...",
+          "isbn": "9780441172719"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "query": "Foundation Isaac Asimov",
+      "success": true,
+      "books": [...]
+    }
+  ]
+}
+```
+
+### Behavior & Rate Limits
+- **Cache Pre-resolution**: Items matching existing Redis/DB cache entries resolve instantly.
+- **Throttled Concurrency**: Uncached items process with max **5 concurrent calls** to external providers to prevent upstream failures.
+- **Partial Success**: Individual item errors are reported per result object without failing the overall request.
+- **Rate Limit**: Max **5 batch requests per 10 seconds** per IP (`ABUSE_MAX_BATCH_PER_10S`).
 
 ---
 

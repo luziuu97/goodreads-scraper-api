@@ -38,8 +38,6 @@ export function parseProvider(value: string | null): BookProviderMode {
 
   const registered = getRegisteredProviderIds().join(", ");
   throw new Error(
-    `Invalid provider parameter. Valid options: aggregate, ${registered}` +
-      (registered ? "" : "") +
-      ". (Open Library, Google Books, and OpenAI are not registered yet.)"
+    `Invalid provider parameter. Valid options: aggregate, ${registered}.`
   );
 }

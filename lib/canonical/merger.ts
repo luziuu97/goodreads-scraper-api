@@ -1,0 +1,370 @@
+import { prisma } from "@/lib/db";
+import {
+  detectImageFormat,
+  normalizeBookFormat,
+  normalizeLanguageCode,
+} from "@/lib/canonical/constants";
+import { registerCanonicalLookups } from "@/lib/canonical/resolver";
+import type { ProviderId } from "@/lib/providers/types";
+
+export type RawProviderBookInput = {
+  provider: ProviderId;
+  providerWorkId?: string;
+  providerEditionId?: string;
+  title: string;
+  originalTitle?: string;
+  authorName?: string;
+  description?: string;
+  language?: string;
+  publicationYear?: number;
+  publicationDate?: string;
+  publisher?: string;
+  pages?: number;
+  isbn10?: string | null;
+  isbn13?: string | null;
+  asin?: string | null;
+  format?: string | null;
+  coverUrl?: string | null;
+  coverWidth?: number | null;
+  coverHeight?: number | null;
+  rating?: number | null;
+  ratingsCount?: number | null;
+  genres?: string[];
+  seriesName?: string | null;
+  seriesPosition?: number | null;
+  seriesDescription?: string | null;
+};
+
+/**
+ * Ingest provider book payload and merge into persistent Prisma Work/Edition models.
+ */
+export async function upsertCanonicalWorkFromProvider(
+  input: RawProviderBookInput
+): Promise<string> {
+  const {
+    provider,
+    providerWorkId,
+    providerEditionId,
+    title,
+    originalTitle,
+    authorName,
+    description,
+    publicationYear,
+    publicationDate,
+    publisher,
+    pages,
+    isbn10,
+    isbn13,
+    asin,
+    coverUrl,
+    coverWidth,
+    coverHeight,
+    rating,
+    ratingsCount,
+    genres,
+    seriesName,
+    seriesPosition,
+    seriesDescription,
+  } = input;
+
+  const langCode = normalizeLanguageCode(input.language);
+  const bookFormat = normalizeBookFormat(input.format);
+  const canonicalTitleStr = originalTitle?.trim() || title.trim();
+  const slugStr = canonicalTitleStr
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  // 1. Resolve or Create Author
+  let authorId: string | null = null;
+  if (authorName?.trim()) {
+    const authorSlug = authorName
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    
+    const author = await prisma.author.upsert({
+      where: { slug: authorSlug },
+      update: {},
+      create: { name: authorName.trim(), slug: authorSlug },
+    });
+    authorId = author.id;
+  }
+
+  // 2. Resolve or Create Series
+  let seriesId: string | null = null;
+  if (seriesName?.trim()) {
+    const seriesSlug = seriesName
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    const series = await prisma.series.upsert({
+      where: { slug: seriesSlug },
+      update: {},
+      create: { canonicalName: seriesName.trim(), slug: seriesSlug },
+    });
+    seriesId = series.id;
+
+    // Series Translation
+    await prisma.seriesTranslation.upsert({
+      where: {
+        seriesId_language: { seriesId: series.id, language: langCode },
+      },
+      update: {
+        name: seriesName.trim(),
+        description: seriesDescription || undefined,
+      },
+      create: {
+        seriesId: series.id,
+        language: langCode,
+        name: seriesName.trim(),
+        description: seriesDescription || null,
+      },
+    });
+  }
+
+  // 3. Resolve Work (via ProviderMapping, ISBN, or Slug)
+  let existingWorkId: string | null = null;
+
+  if (providerWorkId) {
+    const map = await prisma.providerMapping.findFirst({
+      where: { provider, providerWorkId },
+      select: { workId: true },
+    });
+    if (map) existingWorkId = map.workId;
+  }
+
+  if (!existingWorkId && (isbn13 || isbn10 || asin)) {
+    const edition = await prisma.edition.findFirst({
+      where: {
+        OR: [
+          ...(isbn13 ? [{ isbn13 }] : []),
+          ...(isbn10 ? [{ isbn10 }] : []),
+          ...(asin ? [{ asin }] : []),
+        ],
+      },
+      select: { workId: true },
+    });
+    if (edition) existingWorkId = edition.workId;
+  }
+
+  if (!existingWorkId) {
+    const workBySlug = await prisma.work.findUnique({
+      where: { slug: slugStr },
+      select: { id: true },
+    });
+    if (workBySlug) existingWorkId = workBySlug.id;
+  }
+
+  // 4. Create or Update Work
+  let workId: string;
+  if (existingWorkId) {
+    workId = existingWorkId;
+    await prisma.work.update({
+      where: { id: workId },
+      data: {
+        authorId: authorId || undefined,
+        seriesId: seriesId || undefined,
+        seriesPosition: seriesPosition !== undefined ? seriesPosition : undefined,
+        publicationYear: publicationYear || undefined,
+        averageRating: rating || undefined,
+        ratingsCount: ratingsCount || undefined,
+      },
+    });
+  } else {
+    const newWork = await prisma.work.create({
+      data: {
+        slug: slugStr,
+        canonicalTitle: canonicalTitleStr,
+        originalLanguage: langCode,
+        publicationYear,
+        averageRating: rating,
+        ratingsCount,
+        authorId,
+        seriesId,
+        seriesPosition,
+      },
+    });
+    workId = newWork.id;
+  }
+
+  // 5. Work Translation
+  if (title || description) {
+    await prisma.workTranslation.upsert({
+      where: {
+        workId_language: { workId, language: langCode },
+      },
+      update: {
+        title: title.trim(),
+        description: description || undefined,
+      },
+      create: {
+        workId,
+        language: langCode,
+        title: title.trim(),
+        description: description || null,
+      },
+    });
+  }
+
+  // 6. Merging Genres (Union)
+  if (genres && genres.length > 0) {
+    for (const gName of genres) {
+      if (!gName?.trim()) continue;
+      const cleanGenre = gName.trim();
+      const genre = await prisma.genre.upsert({
+        where: { name: cleanGenre },
+        update: {},
+        create: { name: cleanGenre },
+      });
+      await prisma.genreOnWork
+        .create({
+          data: { workId, genreId: genre.id },
+        })
+        .catch(() => {}); // Ignore duplicate join rows
+    }
+  }
+
+  // 7. Edition & Covers Upsert
+  let editionId: string | null = null;
+  if (isbn13 || isbn10 || asin || providerEditionId) {
+    const existingEdition = await prisma.edition.findFirst({
+      where: {
+        workId,
+        OR: [
+          ...(isbn13 ? [{ isbn13 }] : []),
+          ...(isbn10 ? [{ isbn10 }] : []),
+          ...(asin ? [{ asin }] : []),
+        ],
+      },
+    });
+
+    if (existingEdition) {
+      editionId = existingEdition.id;
+      await prisma.edition.update({
+        where: { id: editionId },
+        data: {
+          publisher: publisher || undefined,
+          publicationDate: publicationDate || undefined,
+          pages: pages || undefined,
+        },
+      });
+    } else {
+      const newEd = await prisma.edition.create({
+        data: {
+          workId,
+          title: title.trim(),
+          format: bookFormat,
+          language: langCode,
+          isbn10: isbn10 || null,
+          isbn13: isbn13 || null,
+          asin: asin || null,
+          publisher: publisher || null,
+          publicationDate: publicationDate || null,
+          pages: pages || null,
+          isDefault: true,
+        },
+      });
+      editionId = newEd.id;
+    }
+
+    // Upsert Cover Image
+    if (coverUrl?.trim()) {
+      const w = coverWidth || 0;
+      const h = coverHeight || 0;
+      const pixelCount = w && h ? w * h : null;
+      const imgFormat = detectImageFormat(coverUrl);
+
+      // Check if cover URL exists
+      const existingCover = await prisma.editionCover.findFirst({
+        where: { editionId, url: coverUrl },
+      });
+
+      if (!existingCover) {
+        await prisma.editionCover.create({
+          data: {
+            editionId,
+            provider,
+            url: coverUrl,
+            width: coverWidth || null,
+            height: coverHeight || null,
+            pixelCount,
+            imageFormat: imgFormat,
+            isDefault: true,
+          },
+        });
+      }
+    }
+  }
+
+  // 8. Provider Mapping
+  if (providerWorkId || providerEditionId) {
+    await prisma.providerMapping
+      .upsert({
+        where: {
+          provider_providerWorkId: {
+            provider,
+            providerWorkId: providerWorkId || "",
+          },
+        },
+        update: { workId, editionId: editionId || undefined },
+        create: {
+          provider,
+          providerWorkId: providerWorkId || null,
+          providerEditionId: providerEditionId || null,
+          workId,
+          editionId: editionId || null,
+        },
+      })
+      .catch(() => {});
+  }
+
+  // 9. Register Redis Lookups
+  await registerCanonicalLookups({
+    workId,
+    isbns: [isbn13, isbn10, asin],
+    providerWorkIds: providerWorkId ? [{ provider, id: providerWorkId }] : [],
+  });
+
+  return workId;
+}
+
+/**
+ * Score and rank top editions for a Canonical Work (returns up to `limit` editions).
+ */
+export function getRankedTopEditions(
+  editions: any[],
+  userLang: string = "en",
+  limit: number = 5
+): any[] {
+  if (!editions || editions.length === 0) return [];
+
+  const scored = editions.map((ed) => {
+    let score = 0;
+    const hasCover = ed.covers && ed.covers.length > 0;
+    if (hasCover) score += 50;
+    if (ed.language === userLang) score += 30;
+    if (ed.isDefault) score += 20;
+    if (ed.isbn13) score += 10;
+    return { ed, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const selected: any[] = [];
+  const seenFormats = new Set<string>();
+
+  for (const item of scored) {
+    if (selected.length >= limit) break;
+    const formatKey = `${item.ed.language}:${item.ed.format}`;
+    if (!seenFormats.has(formatKey) || selected.length < 3) {
+      selected.push(item.ed);
+      seenFormats.add(formatKey);
+    }
+  }
+
+  return selected;
+}
