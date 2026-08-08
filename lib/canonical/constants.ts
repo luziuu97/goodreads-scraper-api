@@ -96,3 +96,87 @@ export function detectImageFormat(url?: string | null): string {
   if (lower.endsWith(".avif")) return "avif";
   return "jpeg";
 }
+
+const RUBBISH_TAG_PATTERNS = [
+  /^read-in-\d+$/i,
+  /^read-\d+$/i,
+  /^favorites?$/i,
+  /^owned(-books)?$/i,
+  /^books-i-own$/i,
+  /^kindle(-unlimited)?$/i,
+  /^tbr$/i,
+  /^dnf$/i,
+  /^currently-reading$/i,
+  /^shelfari/i,
+  /^goodreads/i,
+  /^to-read$/i,
+  /^wishlist$/i,
+  /^library(-book)?$/i,
+  /^listened-to$/i,
+  /^\d+$/,
+];
+
+const POPULAR_SUBJECT_WEIGHTS: Array<{ pattern: RegExp; weight: number }> = [
+  { pattern: /\b(fiction|literary fiction)\b/i, weight: 100 },
+  { pattern: /\b(fantasy|epic fantasy|dark fantasy|high fantasy)\b/i, weight: 95 },
+  { pattern: /\b(science fiction|sci-fi|space opera)\b/i, weight: 90 },
+  { pattern: /\b(romance|contemporary romance)\b/i, weight: 85 },
+  { pattern: /\b(mystery|thriller|crime|suspense|detective)\b/i, weight: 80 },
+  { pattern: /\b(history|historical|historical fiction)\b/i, weight: 75 },
+  { pattern: /\b(biography|autobiography|memoir)\b/i, weight: 70 },
+  { pattern: /\b(spanish literature|literatura|hispanic)\b/i, weight: 65 },
+  { pattern: /\b(classics|classic)\b/i, weight: 60 },
+  { pattern: /\b(young adult|ya)\b/i, weight: 55 },
+  { pattern: /\b(non-fiction|nonfiction)\b/i, weight: 50 },
+  { pattern: /\b(philosophy|philosophical)\b/i, weight: 45 },
+  { pattern: /\b(poetry|poesía)\b/i, weight: 40 },
+  { pattern: /\b(horror)\b/i, weight: 35 },
+  { pattern: /\b(business|economics)\b/i, weight: 30 },
+];
+
+export function cleanCategoryString(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/^(FICTION|NONFICTION)\s*\/\s*/i, "");
+  s = s.replace(/\s*\/\s*/g, " / ");
+  return s.trim();
+}
+
+export function isRubbishCategory(tag: string): boolean {
+  const norm = tag.trim().toLowerCase();
+  if (!norm || norm.length < 2 || norm.length > 80) return true;
+  return RUBBISH_TAG_PATTERNS.some((pattern) => pattern.test(norm));
+}
+
+export function normalizeAndRankCategories(
+  rawCategories: string[] | undefined | null,
+  maxLimit: number = 5
+): string[] {
+  if (!rawCategories || rawCategories.length === 0) return [];
+
+  const seen = new Set<string>();
+  const candidates: Array<{ clean: string; score: number }> = [];
+
+  for (const raw of rawCategories) {
+    if (!raw || typeof raw !== "string") continue;
+    const cleaned = cleanCategoryString(raw);
+    if (isRubbishCategory(cleaned)) continue;
+
+    const lowerKey = cleaned.toLowerCase();
+    if (seen.has(lowerKey)) continue;
+    seen.add(lowerKey);
+
+    let score = 10;
+    for (const pw of POPULAR_SUBJECT_WEIGHTS) {
+      if (pw.pattern.test(cleaned)) {
+        score += pw.weight;
+        break;
+      }
+    }
+
+    candidates.push({ clean: cleaned, score });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, maxLimit).map((c) => c.clean);
+}
+

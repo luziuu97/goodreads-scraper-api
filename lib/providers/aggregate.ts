@@ -19,6 +19,7 @@ import type {
   SeriesDetailsInput,
   SeriesSearchInput,
 } from "@/lib/providers/types";
+import { normalizeAndRankCategories } from "@/lib/canonical/constants";
 import { getImageDimensions } from "@/lib/utils/image-size";
 
 function normalizeIsbn(value: string | null | undefined): string | null {
@@ -32,10 +33,6 @@ function titleAuthorKey(book: NormalizedSearchBook): string {
 }
 
 function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): NormalizedSearchBook {
-  const genres = Array.from(
-    new Set([...(a.genres ?? []), ...(b.genres ?? [])].filter(Boolean))
-  );
-
   const translators = Array.from(
     new Set([...(a.translators ?? []), ...(b.translators ?? [])].filter(Boolean))
   );
@@ -43,6 +40,12 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
   // Give preference to ISBNDB data for ISBNs, edition details, publisher, pages, format, title, author
   const isbndbHit = a.provider === "isbndb" ? a : b.provider === "isbndb" ? b : null;
   const otherHit = isbndbHit ? (isbndbHit === a ? b : a) : null;
+
+  // Categories/Subjects: Prefer ISBNDB subjects if available, else combine, rank and cap to top 5
+  const rawGenres = isbndbHit?.genres && isbndbHit.genres.length > 0
+    ? isbndbHit.genres
+    : [...(a.genres ?? []), ...(b.genres ?? [])];
+  const cleanGenres = normalizeAndRankCategories(rawGenres, 5);
 
   if (isbndbHit) {
     const cover = isbndbHit.cover || otherHit?.cover || a.cover || b.cover;
@@ -55,7 +58,7 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
       cover: cover,
       rating: isbndbHit.rating ?? otherHit?.rating ?? a.rating,
       publicationDate: isbndbHit.publicationDate || otherHit?.publicationDate || a.publicationDate,
-      genres: genres.length > 0 ? genres.slice(0, 20) : undefined,
+      genres: cleanGenres.length > 0 ? cleanGenres : undefined,
       isbn: isbndbHit.isbn || otherHit?.isbn || null,
       isbn10: isbndbHit.isbn10 || otherHit?.isbn10 || null,
       language: isbndbHit.language || otherHit?.language || null,
@@ -85,7 +88,7 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
     cover: preferACover ? a.cover : b.cover || a.cover,
     rating: a.rating ?? b.rating,
     publicationDate: a.publicationDate || b.publicationDate,
-    genres: genres.length > 0 ? genres.slice(0, 20) : undefined,
+    genres: cleanGenres.length > 0 ? cleanGenres : undefined,
     isbn: a.isbn ?? b.isbn ?? null,
     isbn10: a.isbn10 ?? b.isbn10 ?? null,
     language: a.language ?? b.language,
@@ -247,6 +250,7 @@ export async function getDetailsAggregate(
     if (work) {
       const topEditions = getRankedTopEditions(work.editions);
       const matchedEdition = work.editions.find((e: any) => e.id === resolvedIsbn.editionId) || work.editions[0];
+      const cleanGenres = normalizeAndRankCategories(work.genres.map((g: any) => g.genre.name), 5);
 
       return {
         success: true,
@@ -260,7 +264,7 @@ export async function getDetailsAggregate(
           rating: work.averageRating,
           ratingsCount: work.ratingsCount,
           publicationYear: work.publicationYear,
-          genres: work.genres.map((g: any) => g.genre.name),
+          genres: cleanGenres,
           matchedEdition: matchedEdition ? {
             id: matchedEdition.id,
             isbn13: matchedEdition.isbn13,
@@ -278,54 +282,137 @@ export async function getDetailsAggregate(
     }
   }
 
-  // 2. Provider Fetch Fallback
+  // 2. Parallel Provider Details Fetch & Prioritized Merge
   const providers = listAvailableProviders();
-  const errors: Error[] = [];
+  const settled = await Promise.allSettled(providers.map((p) => p.getDetails(input)));
 
-  for (const provider of providers) {
-    try {
-      const details = await provider.getDetails(input);
+  const fulfilled = settled
+    .map((res, idx) => ({ res, provider: providers[idx] }))
+    .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof providers)[number] } => item.res.status === "fulfilled");
 
-      // Ingest into Prisma Canonical store
-      const b: any = details.book;
-      if (b) {
-        upsertCanonicalWorkFromProvider({
-          provider: provider.id,
-          providerWorkId: String(b.id || input.slug),
-          title: String(b.title || ""),
-          originalTitle: b.originalTitle || b.workTitle,
-          authorName: typeof b.author === "string" ? b.author : b.author?.name,
-          description: b.description,
-          publicationYear: b.publicationYear || b.originalPublicationYear,
-          publicationDate: b.publicationDate,
-          publisher: b.publisher,
-          pages: b.pages || b.numberOfPages,
-          isbn10: b.isbn10,
-          isbn13: b.isbn13 || b.isbn,
-          asin: b.asin,
-          format: b.format,
-          coverUrl: b.coverUrl || b.cover || b.image,
-          rating: b.rating || b.averageRating,
-          ratingsCount: b.ratingsCount,
-          genres: b.genres,
-          seriesName: b.series?.name || b.seriesName,
-          seriesPosition: b.series?.position || b.seriesPosition,
-        }).catch((err) => console.error("Canonical detail ingest error:", err));
+  if (fulfilled.length === 0) {
+    const firstErr = settled.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+    throw firstErr?.reason || new Error("No provider could resolve book details");
+  }
+
+  // Prefer ISBNDB match if available for primary details
+  const isbndbMatch = fulfilled.find((item) => item.provider.id === "isbndb");
+  const primaryMatch = isbndbMatch || fulfilled[0];
+  const otherMatches = fulfilled.filter((item) => item !== primaryMatch);
+
+  const primaryBook: any = primaryMatch.res.value.book || {};
+  const mergedBook: Record<string, unknown> = { ...primaryBook };
+
+  // 1. Description / Synopsis: Prioritize ISBNDB synopsis/description when available
+  let description = primaryBook.description;
+  if (!description || typeof description !== "string" || !description.trim()) {
+    for (const m of otherMatches) {
+      const d = (m.res.value.book as any)?.description;
+      if (typeof d === "string" && d.trim()) {
+        description = d;
+        break;
       }
+    }
+  }
+  mergedBook.description = description || null;
 
-      return {
-        ...details,
-        provider: "aggregate",
-        book: {
-          ...details.book,
-        },
-      };
-    } catch (error) {
-      errors.push(error instanceof Error ? error : new Error(String(error)));
+  // 2. Publication Date
+  let publicationDate = primaryBook.publicationDate || primaryBook.publishDate;
+  if (!publicationDate) {
+    for (const m of otherMatches) {
+      const pd = (m.res.value.book as any)?.publicationDate || (m.res.value.book as any)?.publishDate;
+      if (pd) {
+        publicationDate = pd;
+        break;
+      }
+    }
+  }
+  mergedBook.publicationDate = publicationDate || null;
+  mergedBook.publishDate = publicationDate || null;
+
+  // 3. Publisher
+  let publisher = primaryBook.publisher || primaryBook.publishedBy;
+  if (!publisher) {
+    for (const m of otherMatches) {
+      const p = (m.res.value.book as any)?.publisher || (m.res.value.book as any)?.publishedBy;
+      if (p) {
+        publisher = p;
+        break;
+      }
+    }
+  }
+  mergedBook.publisher = publisher || null;
+  mergedBook.publishedBy = publisher || null;
+
+  // 4. Language
+  let language = primaryBook.language;
+  if (!language) {
+    for (const m of otherMatches) {
+      const l = (m.res.value.book as any)?.language;
+      if (l) {
+        language = l;
+        break;
+      }
+    }
+  }
+  mergedBook.language = language || null;
+
+  // 5. Pages
+  let pages = primaryBook.pages;
+  if (!pages) {
+    for (const m of otherMatches) {
+      const pg = (m.res.value.book as any)?.pages;
+      if (pg) {
+        pages = pg;
+        break;
+      }
+    }
+  }
+  mergedBook.pages = pages || null;
+
+  // 6. Genres / Categories: Prefer ISBNDB subjects if available, else combine, rank and cap to top 5
+  const rawGenresList: string[] = isbndbMatch
+    ? ((isbndbMatch.res.value.book as any)?.genres || [])
+    : fulfilled.flatMap((m) => (m.res.value.book as any)?.genres || []);
+
+  const cleanGenres = normalizeAndRankCategories(rawGenresList, 5);
+  mergedBook.genres = cleanGenres;
+
+  // Background ingest into Prisma Canonical store
+  for (const m of fulfilled) {
+    const b: any = m.res.value.book;
+    if (b) {
+      upsertCanonicalWorkFromProvider({
+        provider: m.provider.id,
+        providerWorkId: String(b.id || input.slug),
+        title: String(b.title || ""),
+        originalTitle: b.originalTitle || b.workTitle,
+        authorName: typeof b.author === "string" ? b.author : b.author?.name,
+        description: String(mergedBook.description || b.description || ""),
+        publicationYear: b.publicationYear || b.originalPublicationYear,
+        publicationDate: String(mergedBook.publicationDate || b.publicationDate || ""),
+        publisher: String(mergedBook.publisher || b.publisher || ""),
+        pages: typeof mergedBook.pages === "number" ? mergedBook.pages : b.pages,
+        isbn10: b.isbn10,
+        isbn13: b.isbn13 || b.isbn,
+        asin: b.asin,
+        format: b.format,
+        coverUrl: b.coverUrl || b.cover || b.image,
+        rating: b.rating || b.averageRating,
+        ratingsCount: b.ratingsCount,
+        genres: cleanGenres,
+        seriesName: b.series?.name || b.seriesName,
+        seriesPosition: b.series?.position || b.seriesPosition,
+      }).catch((err) => console.error("Canonical detail ingest error:", err));
     }
   }
 
-  throw errors[0] || new Error("No provider could resolve book details");
+  return {
+    success: true,
+    provider: "aggregate",
+    scrapedURL: primaryMatch.res.value.scrapedURL,
+    book: mergedBook,
+  };
 }
 
 export async function searchByProviderId(

@@ -1,3 +1,4 @@
+import { prisma } from "@/lib/db";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
@@ -197,21 +198,21 @@ export async function batchSearchBooksByProvider(input: {
           });
 
           if (dbEd) {
-            const defaultCover = dbEd.covers.find((c) => c.isDefault) || dbEd.covers[0];
-            const searchBook = {
+            const defaultCover = dbEd.covers.find((c: { isDefault: boolean }) => c.isDefault) || dbEd.covers[0];
+            const searchBook: NormalizedSearchBook = {
               id: dbEd.work.id,
-              provider: "canonical" as any,
+              provider: "isbndb",
               title: dbEd.title || dbEd.work.canonicalTitle,
               workTitle: dbEd.work.canonicalTitle,
               author: dbEd.work.author?.name || "Unknown Author",
               cover: defaultCover?.url || "",
               rating: dbEd.work.averageRating ?? undefined,
               publicationDate: dbEd.publicationDate || (dbEd.work.publicationYear ? String(dbEd.work.publicationYear) : undefined),
-              genres: dbEd.work.genres.map((g) => g.genre.name),
+              genres: dbEd.work.genres.map((g: { genre: { name: string } }) => g.genre.name),
               isbn: dbEd.isbn13 || dbEd.isbn10 || null,
               isbn10: dbEd.isbn10 || null,
               language: dbEd.language || null,
-              presentation: "isbn",
+              presentation: "isbn" as const,
               edition: {
                 id: 0,
                 title: dbEd.title,

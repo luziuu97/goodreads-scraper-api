@@ -3,6 +3,7 @@ import {
   detectImageFormat,
   normalizeBookFormat,
   normalizeLanguageCode,
+  normalizeAndRankCategories,
 } from "@/lib/canonical/constants";
 import { registerCanonicalLookups } from "@/lib/canonical/resolver";
 import { getImageDimensions } from "@/lib/utils/image-size";
@@ -283,9 +284,9 @@ export async function upsertCanonicalWorkFromProvider(
     });
   }
 
-  // 6. Merging Genres (Union)
+  // 6. Merging Genres (Top 5 clean categories)
   if (genres && genres.length > 0) {
-    const validGenres = genres.filter((g): g is string => Boolean(g && g.trim()));
+    const validGenres = normalizeAndRankCategories(genres, 5);
     if (validGenres.length > 0) {
       const genreRecords = await Promise.all(
         validGenres.map((gName) => safeUpsertGenre(gName.trim()))
