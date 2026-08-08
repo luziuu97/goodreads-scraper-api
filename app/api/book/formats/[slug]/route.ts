@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
 import { fetchHardcoverBookFormats } from "@/lib/providers/hardcover/client";
+import { findCanonicalWork } from "@/lib/canonical/reader";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_FORMATS,
@@ -33,16 +34,6 @@ export async function GET(
   }
 
   try {
-    if (!getHardcoverApiToken()) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "HARDCOVER_API_TOKEN is required to list book formats",
-        },
-        { status: 503 }
-      );
-    }
-
     const { slug } = await params;
     const decodedSlug = decodeURIComponent(slug);
 
@@ -58,6 +49,20 @@ export async function GET(
 
     const language = req.nextUrl.searchParams.get("language");
     const format = req.nextUrl.searchParams.get("format");
+
+    if (language && language !== "original" && !/^[a-z]{2,3}$/i.test(language.trim())) {
+      throw new Error("Invalid language parameter. Use an ISO code like en or es");
+    }
+    if (
+      format &&
+      !["ebook", "audiobook", "hardcover", "paperback", "physical"].includes(
+        format.trim().toLowerCase()
+      )
+    ) {
+      throw new Error(
+        "Invalid format parameter. Use ebook, audiobook, hardcover, paperback, or physical"
+      );
+    }
 
     const limitParam = req.nextUrl.searchParams.get("limit");
     const limit = limitParam
@@ -90,6 +95,89 @@ export async function GET(
       );
       cachedResponse.headers.set("X-Cache", "HIT");
       return cachedResponse;
+    }
+
+    // Postgres sits between Redis and Hardcover. Stored editions can satisfy
+    // this endpoint even when the external provider is unavailable.
+    try {
+      const localWork = await findCanonicalWork(decodedSlug);
+      if (localWork && localWork.editions.length > 0) {
+        const requestedLanguage = language?.trim().toLowerCase() || null;
+        const requestedFormat = format?.trim().toUpperCase() || null;
+        const formats = localWork.editions
+          .filter((edition) => {
+            const languageMatches =
+              !requestedLanguage ||
+              requestedLanguage === "original" ||
+              edition.language.toLowerCase() === requestedLanguage;
+            const formatMatches =
+              !requestedFormat ||
+              edition.format === requestedFormat ||
+              (requestedFormat === "PHYSICAL" &&
+                ["HARDCOVER", "PAPERBACK"].includes(edition.format));
+            return languageMatches && formatMatches;
+          })
+          .slice(0, limit)
+          .map((edition, index) => {
+            const cover =
+              edition.covers.find((item) => item.isDefault) || edition.covers[0];
+            return {
+              editionId: index + 1,
+              title: edition.title,
+              format: edition.format.toLowerCase(),
+              formatLabel: edition.format,
+              editionFormat: edition.format,
+              readingFormat: null,
+              language: edition.language,
+              languageCode: edition.language,
+              country: null,
+              countryCode: null,
+              isbn: edition.isbn13,
+              isbn10: edition.isbn10,
+              asin: edition.asin,
+              pages: edition.pages,
+              publicationDate: edition.publicationDate,
+              publisher: edition.publisher,
+              cover: cover?.url || "",
+              usersCount: null,
+            };
+          });
+
+        const responseBody = {
+          success: true as const,
+          scrapedURL: `canonical://work/${localWork.id}`,
+          book: { id: localWork.id, slug: localWork.slug, title: localWork.canonicalTitle },
+          formats,
+          filters: {
+            language: requestedLanguage,
+            resolvedLanguage: requestedLanguage === "original" ? localWork.originalLanguage : requestedLanguage,
+            originalLanguage: localWork.originalLanguage,
+            format: requestedFormat?.toLowerCase() || null,
+          },
+          availableLanguages: Array.from(new Set(localWork.editions.map((edition) => edition.language)))
+            .sort()
+            .map((code) => ({ code, name: code })),
+          availableFormats: Array.from(new Set(localWork.editions.map((edition) => edition.format.toLowerCase()))).sort(),
+          totalEditions: localWork.editions.length,
+          totalMatched: formats.length,
+        };
+        await setCachedResponse(cacheKey, responseBody, CACHE_TTL_FORMATS);
+        const databaseResponse = NextResponse.json(responseBody);
+        databaseResponse.headers.set("X-Cache", "DATABASE");
+        return databaseResponse;
+      }
+    } catch (error) {
+      console.error("Canonical format lookup failed; falling back to Hardcover:", error);
+    }
+
+    if (!getHardcoverApiToken()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "HARDCOVER_API_TOKEN is required to list book formats",
+        },
+        { status: 503 }
+      );
     }
 
     const formats = await fetchHardcoverBookFormats(decodedSlug, {

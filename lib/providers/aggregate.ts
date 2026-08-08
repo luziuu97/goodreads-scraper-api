@@ -141,13 +141,37 @@ function ensureProvidersConfigured(): void {
   }
 }
 
-import { upsertCanonicalWorkFromProvider, getRankedTopEditions } from "@/lib/canonical/merger";
-import { resolveCanonicalByIsbn, resolveCanonicalByProviderWorkId } from "@/lib/canonical/resolver";
-import { prisma } from "@/lib/db";
+import { upsertCanonicalWorkFromProvider } from "@/lib/canonical/merger";
+import {
+  canonicalWorkToDetails,
+  findCanonicalWork,
+  getCanonicalSeriesDetails,
+  searchCanonicalBooks,
+  searchCanonicalSeries,
+} from "@/lib/canonical/reader";
 
 export async function searchAggregate(
   input: BookSearchInput
 ): Promise<NormalizedSearchResponse> {
+  // Postgres is the canonical read-through store. A local hit is complete for
+  // this request and avoids spending provider quota or adding network latency.
+  try {
+    const localBooks = await searchCanonicalBooks(input);
+    if (localBooks.length > 0) {
+      return {
+        success: true,
+        provider: "aggregate",
+        results: {
+          query: input.query,
+          totalResults: localBooks.length,
+          books: localBooks,
+        },
+      };
+    }
+  } catch (error) {
+    console.error("Canonical book search failed; falling back to providers:", error);
+  }
+
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
@@ -231,58 +255,16 @@ export async function searchAggregate(
 export async function getDetailsAggregate(
   input: BookDetailsInput
 ): Promise<NormalizedBookDetailsResponse> {
-  ensureProvidersConfigured();
-
-  // 1. Try exact ISBN resolution
-  const resolvedIsbn = await resolveCanonicalByIsbn(input.slug);
-  if (resolvedIsbn) {
-    const work = await prisma.work.findUnique({
-      where: { id: resolvedIsbn.workId },
-      include: {
-        author: true,
-        series: { include: { translations: true } },
-        translations: true,
-        editions: { include: { covers: true } },
-        genres: { include: { genre: true } },
-      },
-    });
-
-    if (work) {
-      const topEditions = getRankedTopEditions(work.editions);
-      const matchedEdition = work.editions.find((e: any) => e.id === resolvedIsbn.editionId) || work.editions[0];
-      const cleanGenres = normalizeAndRankCategories(work.genres.map((g: any) => g.genre.name), 5);
-
-      return {
-        success: true,
-        provider: "aggregate",
-        scrapedURL: `canonical://work/${work.id}`,
-        book: {
-          id: work.id,
-          slug: work.slug,
-          title: work.canonicalTitle,
-          author: work.author?.name || "Unknown Author",
-          rating: work.averageRating,
-          ratingsCount: work.ratingsCount,
-          publicationYear: work.publicationYear,
-          genres: cleanGenres,
-          matchedEdition: matchedEdition ? {
-            id: matchedEdition.id,
-            isbn13: matchedEdition.isbn13,
-            isbn10: matchedEdition.isbn10,
-            asin: matchedEdition.asin,
-            format: matchedEdition.format,
-            language: matchedEdition.language,
-            publisher: matchedEdition.publisher,
-            covers: matchedEdition.covers,
-          } : null,
-          topEditions,
-          translations: work.translations,
-        },
-      };
-    }
+  try {
+    const localWork = await findCanonicalWork(input.slug);
+    if (localWork) return canonicalWorkToDetails(localWork);
+  } catch (error) {
+    console.error("Canonical detail lookup failed; falling back to providers:", error);
   }
 
-  // 2. Parallel Provider Details Fetch & Prioritized Merge
+  ensureProvidersConfigured();
+
+  // Parallel Provider Details Fetch & Prioritized Merge
   const providers = listAvailableProviders();
   const settled = await Promise.allSettled(providers.map((p) => p.getDetails(input)));
 
@@ -473,6 +455,66 @@ export async function getDetailsByProviderId(
 export async function getCoversAggregate(
   input: BookCoversInput
 ): Promise<NormalizedBookCoversResponse> {
+  try {
+    const localWork = await findCanonicalWork(input.slug);
+    if (localWork) {
+      const localCovers = localWork.editions.flatMap((edition, editionIndex) =>
+        edition.covers.map((cover) => ({
+          editionId: editionIndex + 1,
+          title: edition.title,
+          url: cover.url,
+          width: cover.width,
+          height: cover.height,
+          ratio: cover.width && cover.height ? cover.width / cover.height : null,
+          color: null,
+          pixelCount: cover.pixelCount,
+          imageId: null,
+          format: cover.imageFormat,
+          isbn: edition.isbn13,
+          isbn10: edition.isbn10,
+          asin: edition.asin,
+          publicationDate: edition.publicationDate,
+          pages: edition.pages,
+          publisher: edition.publisher,
+          language: edition.language,
+          languageCode: edition.language,
+          country: null,
+          countryCode: null,
+          isDefault: cover.isDefault,
+        }))
+      );
+      const filtered = (input.onlyWithCover ? localCovers.filter((cover) => cover.url) : localCovers)
+        .sort((a, b) => (b.pixelCount || 0) - (a.pixelCount || 0))
+        .slice(0, input.limit);
+      if (filtered.length > 0) {
+        const best = filtered[0];
+        return {
+          success: true,
+          provider: "aggregate",
+          scrapedURL: `canonical://work/${localWork.id}`,
+          book: {
+            id: localWork.id,
+            slug: localWork.slug,
+            title: localWork.canonicalTitle,
+            provider: "isbndb",
+          },
+          covers: filtered,
+          bestByResolution: {
+            editionId: best.editionId,
+            url: best.url,
+            width: best.width,
+            height: best.height,
+            pixelCount: best.pixelCount,
+          },
+          totalCovers: filtered.length,
+          totalEditions: localWork.editions.length,
+        };
+      }
+    }
+  } catch (error) {
+    console.error("Canonical cover lookup failed; falling back to providers:", error);
+  }
+
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
@@ -660,6 +702,23 @@ export function dedupeSearchSeries(
 export async function searchSeriesAggregate(
   input: SeriesSearchInput
 ): Promise<NormalizedSeriesSearchResponse> {
+  try {
+    const localSeries = await searchCanonicalSeries(input.query, input.limit);
+    if (localSeries.length > 0) {
+      return {
+        success: true,
+        provider: "aggregate",
+        results: {
+          query: input.query,
+          totalResults: localSeries.length,
+          series: localSeries,
+        },
+      };
+    }
+  } catch (error) {
+    console.error("Canonical series search failed; falling back to providers:", error);
+  }
+
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
@@ -727,6 +786,13 @@ export async function searchSeriesByProviderId(
 export async function getSeriesDetailsAggregate(
   input: SeriesDetailsInput
 ): Promise<NormalizedSeriesDetailsResponse> {
+  try {
+    const localSeries = await getCanonicalSeriesDetails(input);
+    if (localSeries) return localSeries;
+  } catch (error) {
+    console.error("Canonical series lookup failed; falling back to providers:", error);
+  }
+
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();

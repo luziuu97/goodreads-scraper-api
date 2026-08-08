@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
-  getCachedResponse,
+  getCachedResponses,
   setCachedResponse,
 } from "@/lib/redis-cache";
 import {
@@ -147,17 +147,16 @@ export async function batchSearchBooksByProvider(input: {
     });
   }
 
-  // 1. Try resolving cache for all processable items in parallel
-  const cacheCheckResults = await Promise.all(
-    processableItems.map(async (item) => {
-      const cached = await getCachedResponse(item.cacheKey);
-      return { item, cached };
-    })
+  // Resolve the whole batch in one Redis round trip. Items with equivalent
+  // normalized inputs share a cache key and therefore share downstream work.
+  const cachedByKey = await getCachedResponses(
+    processableItems.map((item) => item.cacheKey)
   );
 
   const cacheMisses: ProcessableItem[] = [];
 
-  for (const { item, cached } of cacheCheckResults) {
+  for (const item of processableItems) {
+    const cached = cachedByKey.get(item.cacheKey);
     if (cached && Array.isArray(cached?.results?.books)) {
       results[item.index] = {
         index: item.index,
@@ -170,34 +169,60 @@ export async function batchSearchBooksByProvider(input: {
     }
   }
 
-  // 1.5. Try resolving local database hits for cache misses (e.g. ISBNs already stored in Prisma DB)
-  const remainingMisses: ProcessableItem[] = [];
-  await Promise.all(
-    cacheMisses.map(async (miss) => {
-      const cleanIsbnStr = miss.query.replace(/[^0-9X]/gi, "").trim();
-      const isIsbnQuery = cleanIsbnStr.length === 10 || cleanIsbnStr.length === 13;
-      if (isIsbnQuery) {
-        try {
-          const dbEd = await prisma.edition.findFirst({
-            where: {
-              OR: [
-                { isbn13: cleanIsbnStr },
-                { isbn10: cleanIsbnStr },
-                { asin: cleanIsbnStr },
-              ],
-            },
-            include: {
-              work: {
-                include: {
-                  author: true,
-                  genres: { include: { genre: true } },
-                },
-              },
-              covers: true,
-            },
-          });
+  // Only one representative per logical request should touch the DB/provider.
+  const uniqueMisses = Array.from(
+    new Map(cacheMisses.map((item) => [item.cacheKey, item])).values()
+  );
 
-          if (dbEd) {
+  // Try resolving all local ISBN hits with one database query.
+  const remainingMisses: ProcessableItem[] = [];
+  const isbnByCacheKey = new Map<string, string>();
+  for (const miss of uniqueMisses) {
+    const cleanIsbn = miss.query.replace(/[^0-9X]/gi, "").toUpperCase();
+    if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
+      isbnByCacheKey.set(miss.cacheKey, cleanIsbn);
+    }
+  }
+
+  let editionsByIsbn = new Map<string, any>();
+  if (isbnByCacheKey.size > 0) {
+    try {
+      const isbns = Array.from(new Set(isbnByCacheKey.values()));
+      const editions = await prisma.edition.findMany({
+        where: {
+          OR: [
+            { isbn13: { in: isbns } },
+            { isbn10: { in: isbns } },
+            { asin: { in: isbns } },
+          ],
+        },
+        include: {
+          work: {
+            include: {
+              author: true,
+              genres: { include: { genre: true } },
+            },
+          },
+          covers: true,
+        },
+      });
+      for (const edition of editions) {
+        for (const value of [edition.isbn13, edition.isbn10, edition.asin]) {
+          if (value && !editionsByIsbn.has(value.toUpperCase())) {
+            editionsByIsbn.set(value.toUpperCase(), edition);
+          }
+        }
+      }
+    } catch {
+      // Ignore DB lookup errors and proceed to providers.
+      editionsByIsbn = new Map();
+    }
+  }
+
+  for (const miss of uniqueMisses) {
+    const cleanIsbnStr = isbnByCacheKey.get(miss.cacheKey);
+    const dbEd = cleanIsbnStr ? editionsByIsbn.get(cleanIsbnStr) : undefined;
+    if (dbEd) {
             const defaultCover = dbEd.covers.find((c: { isDefault: boolean }) => c.isDefault) || dbEd.covers[0];
             const searchBook: NormalizedSearchBook = {
               id: dbEd.work.id,
@@ -249,15 +274,10 @@ export async function batchSearchBooksByProvider(input: {
             };
 
             await setCachedResponse(miss.cacheKey, responseData, CACHE_TTL_SEARCH);
-            return;
-          }
-        } catch {
-          // Ignore DB lookup error and proceed to provider fetch
-        }
-      }
-      remainingMisses.push(miss);
-    })
-  );
+      continue;
+    }
+    remainingMisses.push(miss);
+  }
 
   // 2. Process remaining cache misses with max concurrency limit of 5
   const CONCURRENCY_LIMIT = 5;
@@ -298,6 +318,18 @@ export async function batchSearchBooksByProvider(input: {
         }
       })
     );
+  }
+
+  // Fan the representative result back out to duplicate inputs.
+  const resultByCacheKey = new Map<string, BatchSearchItemResult>();
+  for (const item of uniqueMisses) {
+    if (results[item.index]) resultByCacheKey.set(item.cacheKey, results[item.index]);
+  }
+  for (const item of cacheMisses) {
+    const representative = resultByCacheKey.get(item.cacheKey);
+    if (representative) {
+      results[item.index] = { ...representative, index: item.index, query: item.query };
+    }
   }
 
   let successfulItems = 0;

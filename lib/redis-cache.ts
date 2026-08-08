@@ -19,6 +19,8 @@ export const CACHE_TTL_FORMATS = CACHE_TTL_COVER;
 export const CACHE_TTL = CACHE_TTL_DETAILS;
 
 let redis: Redis | null = null;
+let redisReadyPromise: Promise<Redis | null> | null = null;
+let redisUnavailableUntil = 0;
 const memoryCache = new LRUCache<string, string>({
   max: 1000,
   ttl: CACHE_TTL_DETAILS * 1000,
@@ -43,7 +45,8 @@ function getRedisClient(): Redis | null {
   if (!redis) {
     try {
       redis = new Redis(redisUrl, {
-        maxRetriesPerRequest: 3,
+        maxRetriesPerRequest: 1,
+        connectTimeout: 1_000,
         retryStrategy: (times) => {
           const delay = Math.min(times * 50, 2000);
           return delay;
@@ -59,6 +62,10 @@ function getRedisClient(): Redis | null {
       redis.on('connect', () => {
         console.log('Redis connected successfully');
       });
+
+      redis.on('ready', () => {
+        redisUnavailableUntil = 0;
+      });
     } catch (error) {
       console.error('Failed to initialize Redis:', error);
       redis = null;
@@ -67,6 +74,43 @@ function getRedisClient(): Redis | null {
   }
 
   return redis;
+}
+
+/**
+ * Return a usable Redis client, waiting briefly for a newly-created connection.
+ * Without this, the first requests after a cold start are guaranteed cache misses
+ * because ioredis is still in its `connecting` state and offline queuing is off.
+ */
+async function getReadyRedisClient(): Promise<Redis | null> {
+  const client = getRedisClient();
+  if (!client) return null;
+  if (client.status === 'ready') return client;
+  if (Date.now() < redisUnavailableUntil) return null;
+
+  if (!redisReadyPromise) {
+    redisReadyPromise = new Promise<Redis | null>((resolve) => {
+      let settled = false;
+      const finish = (value: Redis | null) => {
+        if (settled) return;
+        settled = true;
+        if (!value) redisUnavailableUntil = Date.now() + 5_000;
+        clearTimeout(timeout);
+        client.off('ready', onReady);
+        client.off('end', onUnavailable);
+        resolve(value);
+      };
+      const onReady = () => finish(client);
+      const onUnavailable = () => finish(null);
+      const timeout = setTimeout(() => finish(null), 1_000);
+
+      client.once('ready', onReady);
+      client.once('end', onUnavailable);
+    }).finally(() => {
+      redisReadyPromise = null;
+    });
+  }
+
+  return redisReadyPromise;
 }
 
 /**
@@ -126,16 +170,16 @@ export function generateCacheKey(
 export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   const memoryCached = memoryCache.get(cacheKey);
   if (memoryCached) {
-    return JSON.parse(memoryCached);
+    try {
+      return JSON.parse(memoryCached);
+    } catch {
+      memoryCache.delete(cacheKey);
+    }
   }
 
-  const client = getRedisClient();
+  const client = await getReadyRedisClient();
   
   if (!client) {
-    return null;
-  }
-
-  if (client.status !== 'ready' && client.status !== 'connect') {
     return null;
   }
 
@@ -154,6 +198,53 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   return null;
 }
 
+/** Read many cache entries with a single Redis round trip. */
+export async function getCachedResponses(
+  cacheKeys: string[]
+): Promise<Map<string, any>> {
+  const found = new Map<string, any>();
+  const redisKeys: string[] = [];
+
+  for (const key of new Set(cacheKeys)) {
+    const memoryCached = memoryCache.get(key);
+    if (memoryCached) {
+      try {
+        found.set(key, JSON.parse(memoryCached));
+      } catch {
+        memoryCache.delete(key);
+        redisKeys.push(key);
+      }
+    } else {
+      redisKeys.push(key);
+    }
+  }
+
+  if (redisKeys.length === 0) return found;
+  const client = await getReadyRedisClient();
+  if (!client) return found;
+
+  try {
+    const values = await client.mget(...redisKeys);
+    for (let i = 0; i < redisKeys.length; i++) {
+      const value = values[i];
+      if (!value) continue;
+      try {
+        const key = redisKeys[i];
+        memoryCache.set(key, value);
+        found.set(key, JSON.parse(value));
+      } catch {
+        // Ignore malformed cache entries; the caller will treat them as misses.
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
+      console.error('Redis mget error:', error);
+    }
+  }
+
+  return found;
+}
+
 export async function setCachedResponse(
   cacheKey: string,
   data: any,
@@ -163,13 +254,9 @@ export async function setCachedResponse(
     ttl: ttl * 1000,
   });
 
-  const client = getRedisClient();
+  const client = await getReadyRedisClient();
   
   if (!client) {
-    return;
-  }
-
-  if (client.status !== 'ready' && client.status !== 'connect') {
     return;
   }
 
@@ -185,13 +272,9 @@ export async function setCachedResponse(
 export async function deleteCachedResponse(cacheKey: string): Promise<void> {
   memoryCache.delete(cacheKey);
 
-  const client = getRedisClient();
+  const client = await getReadyRedisClient();
   
   if (!client) {
-    return;
-  }
-
-  if (client.status !== 'ready' && client.status !== 'connect') {
     return;
   }
 
@@ -211,13 +294,9 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
     }
   }
 
-  const client = getRedisClient();
+  const client = await getReadyRedisClient();
   
   if (!client) {
-    return;
-  }
-
-  if (client.status !== 'ready' && client.status !== 'connect') {
     return;
   }
 

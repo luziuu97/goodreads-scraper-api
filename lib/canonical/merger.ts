@@ -430,25 +430,36 @@ export async function upsertCanonicalWorkFromProvider(
   }
 
   // 8. Provider Mapping
-  if (providerWorkId || providerEditionId) {
-    await prisma.providerMapping
-      .upsert({
-        where: {
-          provider_providerWorkId: {
-            provider,
-            providerWorkId: providerWorkId || "",
-          },
-        },
-        update: { workId, editionId: editionId || undefined },
-        create: {
+  if (providerWorkId) {
+    await prisma.providerMapping.upsert({
+      where: {
+        provider_providerWorkId: {
           provider,
-          providerWorkId: providerWorkId || null,
-          providerEditionId: providerEditionId || null,
-          workId,
-          editionId: editionId || null,
+          providerWorkId,
         },
-      })
-      .catch(() => {});
+      },
+      update: { workId, editionId: editionId || undefined },
+      create: {
+        provider,
+        providerWorkId,
+        providerEditionId: providerEditionId || null,
+        workId,
+        editionId: editionId || null,
+      },
+    });
+  } else if (providerEditionId) {
+    await prisma.providerMapping.upsert({
+      where: {
+        provider_providerEditionId: { provider, providerEditionId },
+      },
+      update: { workId, editionId: editionId || undefined },
+      create: {
+        provider,
+        providerEditionId,
+        workId,
+        editionId: editionId || null,
+      },
+    });
   }
 
   // 9. Register Redis Lookups
