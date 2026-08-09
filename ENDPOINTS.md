@@ -16,7 +16,7 @@ Search for books by title, author, or ISBN.
 - **Query parameters**:
   - `query` (required): Search string (title, author, ISBN, or a translated title like `Juego de Tronos`)
   - `type` (optional): `all` (default) \| `title` \| `author` \| `isbn`
-  - `language` (optional): ISO code (`en`, `es`, …) — prefer editions in that language for presentation (title/cover/translator)
+  - `language` (optional): ISO code (`en`, `es`, …) — return only works with an edition in that language and use it for presentation (title/cover/translator)
   - `limit` (optional): 1–50 (default 10)
   - `provider` (optional):
     - omit or `aggregate` — multi-source default (Hardcover, ISBNDB, OpenLibrary)

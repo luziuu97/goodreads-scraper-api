@@ -132,8 +132,8 @@ export type BookSearchInput = {
   limit: number;
   type: string;
   /**
-   * Optional ISO language preference (e.g. es, en). When set, search hits
-   * prefer editions in that language for title/cover/translator presentation.
+   * Optional ISO language filter (e.g. es, en). Search hits must have an
+   * edition in that language and use it for presentation metadata.
    */
   language?: string;
 };

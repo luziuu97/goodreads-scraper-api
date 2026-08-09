@@ -154,18 +154,25 @@ import {
 export async function searchAggregate(
   input: BookSearchInput
 ): Promise<NormalizedSearchResponse> {
+  const targetLanguage = input.language ? toIso639_1(input.language) : null;
   // Postgres is the canonical read-through store. A local hit is complete for
   // this request and avoids spending provider quota or adding network latency.
   try {
     const localBooks = await searchCanonicalBooks(input);
-    if (localBooks.length > 0) {
+    const matchingLocalBooks = targetLanguage
+      ? localBooks.filter(
+          (book) =>
+            toIso639_1(book.languageCode || book.language) === targetLanguage
+        )
+      : localBooks;
+    if (matchingLocalBooks.length > 0) {
       return {
         success: true,
         provider: "aggregate",
         results: {
           query: input.query,
-          totalResults: localBooks.length,
-          books: localBooks,
+          totalResults: matchingLocalBooks.length,
+          books: matchingLocalBooks,
         },
       };
     }
@@ -208,9 +215,18 @@ export async function searchAggregate(
 
   // Prioritize hits matching language preference or ISBNDB hits when searching by ISBN
   const cleanQueryIsbn = normalizeIsbn(input.query);
-  const targetIso1 = input.language ? toIso639_1(input.language) : null;
+  const targetIso1 = targetLanguage;
 
-  merged.sort((a, b) => {
+  // `language` is a filter, not merely a ranking hint. Providers which cannot
+  // prove the language of a hit must not leak a default English work into the
+  // response.
+  const languageFiltered = targetIso1
+    ? merged.filter(
+        (book) => toIso639_1(book.languageCode || book.language) === targetIso1
+      )
+    : merged;
+
+  languageFiltered.sort((a, b) => {
     if (targetIso1) {
       const aLang = (a.languageCode || a.language || "").toLowerCase();
       const bLang = (b.languageCode || b.language || "").toLowerCase();
@@ -229,7 +245,7 @@ export async function searchAggregate(
     return 0;
   });
 
-  const finalBooks = merged.slice(0, input.limit);
+  const finalBooks = languageFiltered.slice(0, input.limit);
 
   // If every provider failed and we have no books, surface the error.
   if (finalBooks.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {

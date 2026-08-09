@@ -21,7 +21,7 @@ export const searchBooksApiParameters: Parameter[] = [
     type: "string",
     required: false,
     description:
-      "Optional ISO language preference (en, es, …). When set, search hits prefer editions in that language for title, cover, and translator.",
+      "Optional ISO language filter (en, es, …). Results must have an edition in that language, which supplies title, cover, and translator metadata.",
     placeholder: "es",
   },
   {

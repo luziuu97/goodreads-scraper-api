@@ -1,4 +1,5 @@
 import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
+import { toIso639_1 } from "@/lib/languages";
 import { hardcoverLimiter } from "@/lib/outgoing-rate-limiter";
 
 const HARDCOVER_GRAPHQL_URL = "https://api.hardcover.app/v1/graphql";
@@ -1351,18 +1352,23 @@ export async function searchHardcoverBooks(input: {
   const effectiveQuery =
     effectiveType === "isbn" ? normalizeIsbnQuery(input.query) : input.query;
 
-  const languagePrefRaw = (input.language || "").trim().toLowerCase();
-  const languagePref =
-    languagePrefRaw && /^[a-z]{2,3}$/.test(languagePrefRaw.split(/[-_]/)[0] || "")
-      ? languagePrefRaw.split(/[-_]/)[0]
-      : null;
+  const languagePref = toIso639_1(input.language);
 
   if (effectiveType === "isbn") {
-    return searchHardcoverBooksByIsbn(effectiveQuery, input.limit);
+    const result = await searchHardcoverBooksByIsbn(effectiveQuery, input.limit);
+    if (!languagePref) {
+      return result;
+    }
+    const books = result.books.filter(
+      (book) => toIso639_1(book.languageCode || book.language) === languagePref
+    );
+    return { totalResults: books.length, books };
   }
 
-  // Author search: skip edition presentation enrichment (titles rarely help).
-  const shouldEnrichEditions = effectiveType !== "author";
+  // A language request must be backed by an edition in that language, including
+  // author searches. Without a language filter, author searches do not benefit
+  // from edition presentation enrichment.
+  const shouldEnrichEditions = effectiveType !== "author" || Boolean(languagePref);
 
   // Pull a wider candidate window so quality re-ranking can promote popular
   // complete works that Typesense buried under empty exact-title shells.
@@ -1447,14 +1453,27 @@ export async function searchHardcoverBooks(input: {
     });
   });
 
-  const rankedBooks = rankSearchBooks(rankableHits, input.limit);
+  // Keep the wider candidate set until after language enrichment. A highly
+  // ranked work may have no edition in the requested language while a lower
+  // ranked work does.
+  const rankedBooks = rankSearchBooks(
+    rankableHits,
+    languagePref ? fetchLimit : input.limit
+  );
 
-  const books = shouldEnrichEditions
+  const enrichedBooks = shouldEnrichEditions
     ? await enrichSearchHitsWithEditions(rankedBooks, effectiveQuery, languagePref)
     : rankedBooks;
+  const books = (languagePref
+    ? enrichedBooks.filter(
+        (book) => book.languageCode?.toLowerCase() === languagePref
+      )
+    : enrichedBooks
+  ).slice(0, input.limit);
 
   return {
     totalResults:
+      !languagePref &&
       typeof data.search?.results?.found === "number" && Number.isFinite(data.search.results.found)
         ? data.search.results.found
         : books.length,
