@@ -8,6 +8,8 @@ import type {
   NormalizedSearchBook,
 } from "@/lib/providers/types";
 
+import { toIso639_1, toIso639_2 } from "@/lib/languages";
+
 const OPEN_LIBRARY_BASE = "https://openlibrary.org";
 const COVERS_BASE = "https://covers.openlibrary.org/b";
 
@@ -97,7 +99,13 @@ export async function searchOpenLibrary(
 ): Promise<NormalizedSearchBook[]> {
   const queryParam = encodeURIComponent(input.query);
   const limit = Math.min(Math.max(input.limit || 20, 1), 50);
-  const url = `${OPEN_LIBRARY_BASE}/search.json?q=${queryParam}&limit=${limit}`;
+  const iso3Language = toIso639_2(input.language);
+  const iso1Language = toIso639_1(input.language);
+
+  let url = `${OPEN_LIBRARY_BASE}/search.json?q=${queryParam}&limit=${limit}`;
+  if (iso3Language) {
+    url += `&language=${encodeURIComponent(iso3Language)}`;
+  }
 
   const res = await fetch(url, {
     headers: {

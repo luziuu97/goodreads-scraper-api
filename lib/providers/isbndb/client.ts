@@ -117,6 +117,8 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
   };
 }
 
+import { getLanguageName, toIso639_1 } from "@/lib/languages";
+
 export async function searchIsbndb(
   input: BookSearchInput
 ): Promise<NormalizedSearchBook[]> {
@@ -124,7 +126,14 @@ export async function searchIsbndb(
   if (!query) return [];
 
   const limit = Math.min(Math.max(input.limit || 20, 1), 50);
-  const cacheKey = buildLogicalCacheKey("provider:isbndb:search", { query, limit });
+  const languagePref = input.language ? toIso639_1(input.language) : null;
+  const languageName = input.language ? getLanguageName(input.language) : null;
+
+  const cacheKey = buildLogicalCacheKey("provider:isbndb:search", {
+    query,
+    limit,
+    language: languagePref || "",
+  });
   const cached = await getCachedResponse(cacheKey);
   if (cached && Array.isArray(cached)) {
     return cached;
@@ -174,7 +183,24 @@ export async function searchIsbndb(
   }
 
   const data: ISBNDBSearchResponse = await res.json();
-  const rawBooks = data.books || [];
+  let rawBooks = data.books || [];
+
+  if (languagePref || languageName) {
+    const targetIso = (languagePref || "").toLowerCase();
+    const targetName = (languageName || "").toLowerCase();
+
+    // Sort/filter books that match the specified language
+    rawBooks = [...rawBooks].sort((a, b) => {
+      const aLang = (a.language || "").toLowerCase();
+      const bLang = (b.language || "").toLowerCase();
+      const aMatch = aLang.includes(targetIso) || aLang.includes(targetName);
+      const bMatch = bLang.includes(targetIso) || bLang.includes(targetName);
+      if (aMatch && !bMatch) return -1;
+      if (!aMatch && bMatch) return 1;
+      return 0;
+    });
+  }
+
   const results = rawBooks.map(mapIsbndbBookToSearchBook);
   await setCachedResponse(cacheKey, results, CACHE_TTL_SEARCH);
   return results;

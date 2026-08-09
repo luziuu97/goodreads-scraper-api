@@ -21,6 +21,7 @@ import type {
 } from "@/lib/providers/types";
 import { normalizeAndRankCategories } from "@/lib/canonical/constants";
 import { getImageDimensions } from "@/lib/utils/image-size";
+import { toIso639_1 } from "@/lib/languages";
 
 function normalizeIsbn(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -205,15 +206,28 @@ export async function searchAggregate(
 
   const merged = dedupeSearchBooks(books);
 
-  // Prioritize ISBNDB hits when searching by ISBN
+  // Prioritize hits matching language preference or ISBNDB hits when searching by ISBN
   const cleanQueryIsbn = normalizeIsbn(input.query);
-  if (cleanQueryIsbn || input.type === "isbn") {
-    merged.sort((a, b) => {
+  const targetIso1 = input.language ? toIso639_1(input.language) : null;
+
+  merged.sort((a, b) => {
+    if (targetIso1) {
+      const aLang = (a.languageCode || a.language || "").toLowerCase();
+      const bLang = (b.languageCode || b.language || "").toLowerCase();
+      const aMatch = aLang.includes(targetIso1);
+      const bMatch = bLang.includes(targetIso1);
+      if (aMatch && !bMatch) return -1;
+      if (!aMatch && bMatch) return 1;
+    }
+
+    if (cleanQueryIsbn || input.type === "isbn") {
       const aIsbndb = a.provider === "isbndb" || a.isbn === cleanQueryIsbn || a.isbn10 === cleanQueryIsbn ? 1 : 0;
       const bIsbndb = b.provider === "isbndb" || b.isbn === cleanQueryIsbn || b.isbn10 === cleanQueryIsbn ? 1 : 0;
       return bIsbndb - aIsbndb;
-    });
-  }
+    }
+
+    return 0;
+  });
 
   const finalBooks = merged.slice(0, input.limit);
 
