@@ -43,14 +43,16 @@ export async function GET(
 
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
     const editionIdParam = req.nextUrl.searchParams.get("editionId");
-    const editionId = editionIdParam ? Number(editionIdParam) : undefined;
+    const rawEditionId = editionIdParam ? Number(editionIdParam) : undefined;
 
     if (
       editionIdParam &&
-      (!Number.isInteger(editionId) || typeof editionId !== "number" || editionId < 1)
+      (!Number.isInteger(rawEditionId) || typeof rawEditionId !== "number" || rawEditionId < 0)
     ) {
-      throw new Error("Invalid editionId parameter. Must be a positive integer");
+      throw new Error("Invalid editionId parameter. Must be a non-negative integer");
     }
+
+    const editionId = rawEditionId && rawEditionId > 0 ? rawEditionId : undefined;
 
     const cacheKey = buildLogicalCacheKey("get_book_details", {
       provider,

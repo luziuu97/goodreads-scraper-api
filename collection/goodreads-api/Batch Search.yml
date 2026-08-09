@@ -15,24 +15,18 @@ http:
       {
         "provider": "aggregate",
         "items": [
-          {
-            "query": "Dune",
-            "type": "all",
-            "limit": 5,
-            "language": "en"
-          },
-          {
-            "isbn": "9780441172719",
-            "type": "isbn",
-            "limit": 1
-          },
-          {
-            "title": "Foundation",
-            "author": "Isaac Asimov",
-            "type": "all",
-            "limit": 3,
-            "language": "en"
-          }
+          {"query":"9780593798430","type":"isbn","limit":20,"language":"en"},
+          {"query":"0593798430","type":"isbn","limit":20,"language":"en"},
+          {"query":"The Correspondent Virginia      Evans","type":"all","limit":20,"language":"en"},
+          {"query":"The Correspondent","type":"all","limit":20,"language":"en"},
+
+          {"query":"El origen de las palabras Damián González Bertolino","type":"all","limit":20,"language":"en"},
+          {"query":"El origen de las palabras","type":"all","limit":20,"language":"en"},
+
+          {"query":"Country People Daniel       Mason","type":"all","limit":20,"language":"en"},
+          {"query":"Country People","type":"all","limit":20,"language":"en"},
+
+          {"query":"The Golden Raven Nora Sakavic","type":"all","limit":20,"language":"en"}
         ]
       }
   auth: inherit

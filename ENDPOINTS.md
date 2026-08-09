@@ -23,7 +23,7 @@ Search for books by title, author, or ISBN.
     - `hardcover` — Hardcover only
     - `isbndb` — ISBNDB only
     - `openlibrary` — OpenLibrary only
-    - `goodreads` — **400** (removed)
+    - `goodreads` — legacy fallback to `hardcover`
 
 ### Example
 

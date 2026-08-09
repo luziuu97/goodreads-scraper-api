@@ -357,7 +357,8 @@ export async function getBookDetailsByProvider(input: {
   slug: string;
   editionId?: number;
 }): Promise<NormalizedBookDetailsResponse> {
-  const { provider, slug, editionId } = input;
+  const { provider, slug, editionId: rawEditionId } = input;
+  const editionId = rawEditionId && rawEditionId > 0 ? rawEditionId : undefined;
 
   if (provider === "aggregate") {
     return getDetailsAggregate({ slug, editionId });

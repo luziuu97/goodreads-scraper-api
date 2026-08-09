@@ -15,7 +15,7 @@ function refreshValidModes(): Set<string> {
  * Parse public provider query param.
  * - null / empty / "aggregate" → aggregate (all registered active providers)
  * - registered provider id → that provider only
- * - "goodreads" → clear deprecation error
+ * - "goodreads" → fall back to "hardcover" for legacy API compatibility
  * - anything else → invalid provider error
  */
 export function parseProvider(value: string | null): BookProviderMode {
@@ -26,9 +26,7 @@ export function parseProvider(value: string | null): BookProviderMode {
   }
 
   if (raw === "goodreads") {
-    throw new Error(
-      "Goodreads HTML provider has been removed. Omit provider for aggregate multi-source metadata, or use provider=hardcover."
-    );
+    return "hardcover";
   }
 
   const modes = refreshValidModes();
@@ -41,3 +39,4 @@ export function parseProvider(value: string | null): BookProviderMode {
     `Invalid provider parameter. Valid options: aggregate, ${registered}.`
   );
 }
+
