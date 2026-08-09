@@ -23,11 +23,35 @@ function normalizedIsbn(value: string): string | null {
   return clean.length === 10 || clean.length === 13 ? clean : null;
 }
 
-function providerFor(work: any, edition?: any): "hardcover" | "openlibrary" | "isbndb" {
-  const provider = edition?.providerMappings?.[0]?.provider || work.providerMappings?.[0]?.provider;
-  return provider === "hardcover" || provider === "openlibrary" || provider === "isbndb"
-    ? provider
-    : "isbndb";
+function providerReference(work: any, edition?: any) {
+  const mappings = [
+    ...(edition?.providerMappings || []),
+    ...(work.providerMappings || []),
+  ];
+  const mapping = mappings.find(
+    (item: any) =>
+      (item.provider === "hardcover" ||
+        item.provider === "openlibrary" ||
+        item.provider === "isbndb") &&
+      item.providerWorkId
+  );
+
+  if (mapping) {
+    return {
+      provider: mapping.provider as "hardcover" | "openlibrary" | "isbndb",
+      id: String(mapping.providerWorkId),
+    };
+  }
+
+  // ISBNDB addresses book details by ISBN. Older canonical rows may predate
+  // provider mappings, but their edition ISBN is still a valid details key.
+  const isbn = edition?.isbn13 || edition?.isbn10;
+  if (isbn) return { provider: "isbndb" as const, id: isbn };
+
+  // Preserve the previous fallback for incomplete legacy rows. Aggregate
+  // details can still resolve this canonical work id when the provider is not
+  // explicitly pinned by a caller.
+  return { provider: "isbndb" as const, id: work.id };
 }
 
 function preferredEdition(work: any, language?: string, isbn?: string | null) {
@@ -49,10 +73,11 @@ export function canonicalWorkToSearchBook(
   const edition = preferredEdition(work, language, isbn);
   const cover = edition?.covers.find((item: any) => item.isDefault) || edition?.covers[0];
   const translation = work.translations.find((item: any) => item.language === language);
+  const providerReferenceForWork = providerReference(work, edition);
 
   return {
-    id: work.id,
-    provider: providerFor(work, edition),
+    id: providerReferenceForWork.id,
+    provider: providerReferenceForWork.provider,
     title: translation?.title || edition?.title || work.canonicalTitle,
     workTitle: work.canonicalTitle,
     author: work.author?.name || "Unknown Author",
