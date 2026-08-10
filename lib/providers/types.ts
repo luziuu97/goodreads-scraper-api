@@ -3,7 +3,8 @@
  * Add new provider ids to ProviderId as they are implemented and registered.
  */
 
-export type ProviderId = "hardcover" | "openlibrary" | "isbndb";
+export type ProviderId = "hardcover" | "openlibrary" | "isbndb" | "goodreads";
+export type MetadataSourceId = ProviderId | "goodreads-dataset";
 
 /** Dispatch modes accepted by the public API (includes virtual aggregate). */
 export type BookProviderMode = "aggregate" | ProviderId;
@@ -60,6 +61,20 @@ export type NormalizedSearchBook = {
     countryCode: string | null;
     cover: string;
   };
+  /**
+   * Compact list of known editions for this work (up to 5).
+   * ISBNs here identify editions, not the work itself.
+   * The top-level isbn/cover/language represent the best or
+   * requested-language edition.
+   */
+  editions?: Array<{
+    isbn: string | null;
+    isbn10: string | null;
+    language: string | null;
+    format: string | null;
+    publicationDate?: string | null;
+    cover?: string;
+  }>;
 };
 
 export type NormalizedSearchResponse = {
@@ -141,6 +156,7 @@ export type BookSearchInput = {
 export type BookDetailsInput = {
   slug: string;
   editionId?: number;
+  language?: string;
 };
 
 export type BookCoversInput = {

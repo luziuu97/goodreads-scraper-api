@@ -4,7 +4,7 @@ import { rateLimit } from "./rate-limit";
 export const API_CONFIG = {
   userAgent:
     env("NEXT_PUBLIC_USER_AGENT") ||
-    "Mozilla/5.0 (compatible; BookMetadataAPI/1.0; +https://github.com/ekamid/goodreads-scraper-api)",
+    "Mozilla/5.0 (compatible; BooksAPI/1.0; +https://github.com/books-api/books-api)",
   /** Soft abuse protection for public book endpoints (not a low daily quota). */
   publicRateLimit: rateLimit(),
 };

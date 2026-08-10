@@ -66,6 +66,12 @@ export type ApiEndPointID =
   | "search_series"
   | "get_series_details";
 
+import {
+  batchSearchBooksApiParameters,
+  batchSearchBooksApiResponse,
+  batchSearchBooksCodeSnippets,
+} from "@/data/api-endpoint/batch-search-books";
+
 export const endpoints: Endpoint[] = [
   {
     id: "get-book-details",
@@ -114,6 +120,18 @@ export const endpoints: Endpoint[] = [
     parameters: searchBooksApiParameters,
     exampleResponse: searchBooksApiResponse,
     codeSnippets: searchBooksCodeSnippets,
+  },
+  {
+    id: "batch-search-books",
+    name: "Batch Search Books",
+    description:
+      "Search up to 50 books in a single request. Cached items resolve instantly with throttled concurrency.",
+    method: "POST",
+    url: "/api/book/batch-search",
+    route: "/api/book/batch-search",
+    parameters: batchSearchBooksApiParameters,
+    exampleResponse: batchSearchBooksApiResponse,
+    codeSnippets: batchSearchBooksCodeSnippets,
   },
   {
     id: "search-series",

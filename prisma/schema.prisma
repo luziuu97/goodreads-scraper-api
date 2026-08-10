@@ -11,28 +11,27 @@ model Work {
   id               String   @id @default(uuid())
   slug             String   @unique
   canonicalTitle   String
-  originalLanguage String   @default("en")
+  originalLanguage String?
   publicationYear  Int?
   averageRating    Float?
   ratingsCount     Int?
+  reviewsCount     Int?
+  textReviewsCount Int?
+  popularityScore  Float?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  authorId String?
-  author   Author? @relation(fields: [authorId], references: [id])
-
-  seriesId       String?
-  series         Series? @relation(fields: [seriesId], references: [id])
-  seriesPosition Float?
-
-  translations     WorkTranslation[]
-  editions         Edition[]
-  genres           GenreOnWork[]
-  providerMappings ProviderMapping[]
+  translations      WorkTranslation[]
+  titles            WorkTitle[]
+  editions          Edition[]
+  contributors      WorkContributor[]
+  seriesMemberships WorkSeries[]
+  genres            GenreOnWork[]
+  externalIds       WorkExternalId[]
 
   @@index([canonicalTitle])
-  @@index([authorId])
-  @@index([seriesId])
+  @@index([ratingsCount])
+  @@index([popularityScore])
 }
 
 model WorkTranslation {
@@ -46,13 +45,29 @@ model WorkTranslation {
   @@unique([workId, language])
 }
 
+model WorkTitle {
+  id              String  @id @default(uuid())
+  workId          String
+  work            Work    @relation(fields: [workId], references: [id], onDelete: Cascade)
+  language        String?
+  title           String
+  normalizedTitle String
+  isPrimary       Boolean @default(false)
+  source          String?
+
+  @@unique([workId, language, normalizedTitle])
+  @@index([normalizedTitle])
+  @@index([workId, language])
+}
+
 model Series {
   id            String              @id @default(uuid())
   slug          String              @unique
   canonicalName String
   booksCount    Int?
   translations  SeriesTranslation[]
-  works         Work[]
+  memberships   WorkSeries[]
+  externalIds   SeriesExternalId[]
 
   @@index([canonicalName])
 }
@@ -68,53 +83,101 @@ model SeriesTranslation {
   @@unique([seriesId, language])
 }
 
+model WorkSeries {
+  workId    String
+  seriesId  String
+  position  Float?
+  isPrimary Boolean @default(false)
+  work      Work    @relation(fields: [workId], references: [id], onDelete: Cascade)
+  series    Series  @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@id([workId, seriesId])
+  @@index([seriesId, position])
+}
+
 model Author {
-  id    String @id @default(uuid())
-  name  String
-  slug  String @unique
-  works Work[]
+  id                   String               @id @default(uuid())
+  name                 String
+  slug                 String               @unique
+  workContributions    WorkContributor[]
+  editionContributions EditionContributor[]
+  externalIds          AuthorExternalId[]
 
   @@index([name])
 }
 
-model Edition {
-  id              String   @id @default(uuid())
-  workId          String
-  work            Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
-  title           String
-  format          String   @default("OTHER")
-  language        String   @default("en")
-  isbn10          String?
-  isbn13          String?
-  asin            String?
-  publisher       String?
-  publicationDate String?
-  pages           Int?
-  isDefault       Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+model WorkContributor {
+  workId    String
+  authorId  String
+  role      String  @default("AUTHOR")
+  position  Int     @default(0)
+  isPrimary Boolean @default(false)
+  work      Work    @relation(fields: [workId], references: [id], onDelete: Cascade)
+  author    Author  @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
-  covers           EditionCover[]
-  providerMappings ProviderMapping[]
+  @@id([workId, authorId, role])
+  @@index([authorId])
+  @@index([workId, isPrimary])
+}
+
+model EditionContributor {
+  editionId String
+  authorId  String
+  role      String  @default("AUTHOR")
+  position  Int     @default(0)
+  edition   Edition @relation(fields: [editionId], references: [id], onDelete: Cascade)
+  author    Author  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@id([editionId, authorId, role])
+  @@index([authorId])
+}
+
+model Edition {
+  id               String   @id @default(uuid())
+  workId           String
+  work             Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
+  title            String
+  format           String   @default("OTHER")
+  language         String?
+  isbn10           String?
+  isbn13           String?
+  asin             String?
+  publisher        String?
+  publicationDate  String?
+  pages            Int?
+  audioLengthMinutes Int?
+  isDefault        Boolean  @default(false)
+  ratingsCount     Int?
+  textReviewsCount Int?
+  popularityScore  Float?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  covers       EditionCover[]
+  contributors EditionContributor[]
+  externalIds  EditionExternalId[]
 
   @@index([workId])
   @@index([isbn10])
   @@index([isbn13])
   @@index([asin])
+  @@index([popularityScore])
 }
 
 model EditionCover {
-  id          String  @id @default(uuid())
+  id          String   @id @default(uuid())
   editionId   String
-  edition     Edition @relation(fields: [editionId], references: [id], onDelete: Cascade)
+  edition     Edition  @relation(fields: [editionId], references: [id], onDelete: Cascade)
   provider    String
   url         String
   width       Int?
   height      Int?
   pixelCount  Int?
-  imageFormat String? @default("jpeg")
-  isDefault   Boolean @default(false)
+  imageFormat String?  @default("jpeg")
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
 
+  @@unique([editionId, url])
   @@index([editionId])
 }
 
@@ -129,23 +192,53 @@ model GenreOnWork {
   work    Work   @relation(fields: [workId], references: [id], onDelete: Cascade)
   genreId String
   genre   Genre  @relation(fields: [genreId], references: [id], onDelete: Cascade)
+  source  String @default("canonical")
+  score   Int?
 
-  @@id([workId, genreId])
+  @@id([workId, genreId, source])
   @@index([genreId])
 }
 
-model ProviderMapping {
-  id                String   @id @default(uuid())
-  provider          String
-  providerWorkId    String?
-  providerEditionId String?
-  workId            String
-  work              Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
-  editionId         String?
-  edition           Edition? @relation(fields: [editionId], references: [id], onDelete: Cascade)
+model WorkExternalId {
+  id         String @id @default(uuid())
+  provider   String
+  externalId String
+  workId     String
+  work       Work   @relation(fields: [workId], references: [id], onDelete: Cascade)
 
-  @@unique([provider, providerWorkId])
-  @@unique([provider, providerEditionId])
+  @@unique([provider, externalId])
   @@index([workId])
+}
+
+model EditionExternalId {
+  id         String  @id @default(uuid())
+  provider   String
+  externalId String
+  editionId  String
+  edition    Edition @relation(fields: [editionId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
   @@index([editionId])
+}
+
+model AuthorExternalId {
+  id         String @id @default(uuid())
+  provider   String
+  externalId String
+  authorId   String
+  author     Author @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([authorId])
+}
+
+model SeriesExternalId {
+  id         String @id @default(uuid())
+  provider   String
+  externalId String
+  seriesId   String
+  series     Series @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([seriesId])
 }

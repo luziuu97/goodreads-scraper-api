@@ -15,7 +15,7 @@ export type BookFormat = (typeof BOOK_FORMATS)[number];
 
 /**
  * Standard ISO 639-1 Language Codes supported by the system.
- * Defaults to "en" when unspecified or unresolvable.
+ * Uses "und" (undetermined) when unspecified or unresolvable.
  */
 export const SUPPORTED_LANGUAGES = [
   "en",
@@ -34,26 +34,56 @@ export const SUPPORTED_LANGUAGES = [
 
 export type LanguageCode = (typeof SUPPORTED_LANGUAGES)[number] | string;
 
-/**
- * Normalize provider format strings into canonical BookFormat enum.
- */
 export function normalizeBookFormat(rawFormat?: string | null): BookFormat {
   if (!rawFormat) return "OTHER";
   const norm = rawFormat.toLowerCase().trim();
 
-  if (norm.includes("hardcover") || norm.includes("hardback") || norm.includes("tapa dura") || norm.includes("relie")) {
+  if (
+    norm.includes("hardcover") ||
+    norm.includes("hardback") ||
+    norm.includes("tapa dura") ||
+    norm.includes("relie") ||
+    norm.includes("relié") ||
+    norm.includes("cartoné") ||
+    norm.includes("cartone") ||
+    norm.includes("library binding")
+  ) {
     return "HARDCOVER";
   }
-  if (norm.includes("mass market")) {
+  if (norm.includes("mass market") || norm.includes("pocket") || norm.includes("bolsillo")) {
     return "MASS_MARKET";
   }
-  if (norm.includes("paperback") || norm.includes("softcover") || norm.includes("tapa blanda") || norm.includes("broché")) {
+  if (
+    norm.includes("paperback") ||
+    norm.includes("softcover") ||
+    norm.includes("tapa blanda") ||
+    norm.includes("broché") ||
+    norm.includes("broche") ||
+    norm.includes("rustica") ||
+    norm.includes("rústica") ||
+    norm.includes("physical book") ||
+    norm.includes("trade paper") ||
+    norm.includes("perfect paperback")
+  ) {
     return "PAPERBACK";
   }
-  if (norm.includes("audio") || norm.includes("mp3") || norm.includes("cd") || norm.includes("audible")) {
+  if (
+    norm.includes("audio") ||
+    norm.includes("mp3") ||
+    norm.includes("cd") ||
+    norm.includes("audible") ||
+    norm.includes("cassette")
+  ) {
     return "AUDIOBOOK";
   }
-  if (norm.includes("ebook") || norm.includes("kindle") || norm.includes("digital") || norm.includes("epub") || norm.includes("pdf")) {
+  if (
+    norm.includes("ebook") ||
+    norm.includes("kindle") ||
+    norm.includes("digital") ||
+    norm.includes("epub") ||
+    norm.includes("pdf") ||
+    norm.includes("nook")
+  ) {
     return "EBOOK";
   }
 
@@ -61,11 +91,144 @@ export function normalizeBookFormat(rawFormat?: string | null): BookFormat {
 }
 
 /**
+ * Check if a description or text snippet matches the target language.
+ */
+export function isTextInLanguage(text: string | null | undefined, targetLang: string): boolean {
+  if (!text || !text.trim()) return false;
+  const lower = text.toLowerCase();
+  const iso = normalizeLanguageCode(targetLang);
+
+  if (iso === "es") {
+    const spanishIndicators = [
+      " el ", " la ", " los ", " las ", " un ", " una ", " unos ", " unas ",
+      " y ", " en ", " de ", " que ", " con ", " por ", " para ", " es ",
+      " su ", " sus ", " como ", " pero ", " sobre ", " este ", " esta ",
+      " libro ", " historia ", " vida ", " cuatro ", " mundo ", " armario ",
+      " bruja ", " leon ", " león ", " aventura "
+    ];
+    const matchCount = spanishIndicators.filter((w) => lower.includes(w)).length;
+    const englishIndicators = [
+      " the ", " and ", " of ", " to ", " in ", " a ", " is ", " that ",
+      " with ", " for ", " as ", " was ", " from ", " four ", " siblings ",
+      " wardrobe ", " step "
+    ];
+    const englishCount = englishIndicators.filter((w) => lower.includes(w)).length;
+
+    return matchCount > englishCount;
+  }
+
+  if (iso === "en") {
+    const englishIndicators = [" the ", " and ", " of ", " to ", " in ", " a ", " is ", " that ", " with ", " for ", " as ", " was ", " from "];
+    return englishIndicators.filter((w) => lower.includes(w)).length >= 2;
+  }
+
+  return true;
+}
+
+/**
+ * Format total audio seconds into human-readable duration (e.g. 40440s -> "11h 14m") and total minutes.
+ */
+export function formatAudioLength(totalSeconds?: number | null): { audioLength: string | null; audioLengthMinutes: number | null } {
+  if (typeof totalSeconds !== "number" || totalSeconds <= 0) {
+    return { audioLength: null, audioLengthMinutes: null };
+  }
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  let label = "";
+  if (hours > 0 && minutes > 0) {
+    label = `${hours}h ${minutes}m`;
+  } else if (hours > 0) {
+    label = `${hours}h`;
+  } else {
+    label = `${minutes}m`;
+  }
+
+  return {
+    audioLength: label,
+    audioLengthMinutes: totalMinutes,
+  };
+}
+
+/**
+ * Normalize author name into a canonical slug for deduplication (e.g. "C. S. Lewis" & "C.S. Lewis" -> "c-s-lewis").
+ */
+export function normalizeAuthorSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(translator|translation|translated by|illustrator|illustration|illustrated by|narrator|narrated by|reader|read by|reading|editor|edited by|cover artist)\b/gi, "")
+    .replace(/[\(\)\[\]]/g, " ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Extract primary author and separate any concatenated non-author contributor names/roles.
+ */
+export function parseAuthorNames(rawAuthorName?: string | null): { primaryAuthor: string | null; extraContributors: Array<{ name: string; role: string }> } {
+  if (!rawAuthorName || !rawAuthorName.trim()) {
+    return { primaryAuthor: null, extraContributors: [] };
+  }
+
+  const parts = rawAuthorName.split(/[,;&]|\band\b|\by\b/i).map((p) => p.trim()).filter(Boolean);
+  
+  let primaryAuthor: string | null = null;
+  const extraContributors: Array<{ name: string; role: string }> = [];
+
+  for (const part of parts) {
+    const roleMatch = part.match(/\((translator|translation|illustrator|illustration|narrator|reader|reading|editor)\)/i);
+    const cleanName = part.replace(/\(.*?\)/g, "").trim();
+    if (!cleanName) continue;
+
+    if (roleMatch) {
+      const roleStr = roleMatch[1].toLowerCase();
+      let role = "AUTHOR";
+      if (roleStr.includes("trans")) role = "TRANSLATOR";
+      else if (roleStr.includes("illus")) role = "ILLUSTRATOR";
+      else if (roleStr.includes("narrat") || roleStr.includes("read")) role = "NARRATOR";
+      else if (roleStr.includes("edit")) role = "EDITOR";
+      extraContributors.push({ name: cleanName, role });
+    } else {
+      if (!primaryAuthor) {
+        primaryAuthor = cleanName;
+      } else {
+        extraContributors.push({ name: cleanName, role: "AUTHOR" });
+      }
+    }
+  }
+
+  return { primaryAuthor, extraContributors };
+}
+
+/**
  * Normalize language strings/codes into ISO 639-1 standard code (e.g., "Spanish" -> "es").
  */
 export function normalizeLanguageCode(rawLang?: string | null): string {
-  if (!rawLang) return "en";
+  if (!rawLang) return "und";
   const norm = rawLang.toLowerCase().trim();
+
+  const iso3ToIso1: Record<string, string> = {
+    eng: "en",
+    spa: "es",
+    fra: "fr",
+    fre: "fr",
+    deu: "de",
+    ger: "de",
+    por: "pt",
+    ita: "it",
+    jpn: "ja",
+    zho: "zh",
+    chi: "zh",
+    rus: "ru",
+    nld: "nl",
+    dut: "nl",
+    pol: "pl",
+    kor: "ko",
+  };
+  if (iso3ToIso1[norm]) return iso3ToIso1[norm];
 
   if (norm.startsWith("es") || norm.includes("spanish") || norm.includes("español")) return "es";
   if (norm.startsWith("en") || norm.includes("english") || norm.includes("inglés")) return "en";
@@ -80,8 +243,8 @@ export function normalizeLanguageCode(rawLang?: string | null): string {
   if (norm.startsWith("pl") || norm.includes("polish")) return "pl";
   if (norm.startsWith("ko") || norm.includes("korean")) return "ko";
 
-  // Return original ISO code if 2-3 letters, else fallback to "en"
-  return norm.length <= 3 ? norm : "en";
+  // Return original ISO code if 2-3 letters, else mark it undetermined.
+  return norm.length <= 3 ? norm : "und";
 }
 
 /**
@@ -180,3 +343,58 @@ export function normalizeAndRankCategories(
   return candidates.slice(0, maxLimit).map((c) => c.clean);
 }
 
+/**
+ * Priority rank for cover images:
+ * Rank 1: Hardcover (highest priority)
+ * Rank 2: Other external services (ISBNDB, OpenLibrary, Amazon, etc.)
+ * Rank 3: Goodreads (last resort)
+ */
+export function getCoverPriorityRank(urlOrProvider?: string | null): number {
+  if (!urlOrProvider || !urlOrProvider.trim()) return 999;
+  const str = urlOrProvider.toLowerCase();
+
+  // Rank 1: Hardcover
+  if (str.includes("hardcover") || str.includes("assets.hardcover.app")) {
+    return 1;
+  }
+
+  // Rank 3: Goodreads (last resort)
+  if (
+    str.includes("goodreads") ||
+    str.includes("gr-assets.com") ||
+    str.includes("images.gr-assets")
+  ) {
+    return 3;
+  }
+
+  // Rank 2: Other services (ISBNDB, OpenLibrary, etc.)
+  return 2;
+}
+
+export function pickBestCoverUrl(
+  candidates: Array<string | null | undefined>
+): string {
+  const valid = candidates.filter(
+    (u): u is string => typeof u === "string" && u.trim().length > 0
+  );
+  if (valid.length === 0) return "";
+
+  valid.sort((a, b) => getCoverPriorityRank(a) - getCoverPriorityRank(b));
+  return valid[0];
+}
+
+export function selectBestCover<T extends { url?: string | null; provider?: string | null }>(
+  covers: T[] | null | undefined
+): T | undefined {
+  if (!covers || covers.length === 0) return undefined;
+  const validCovers = covers.filter((c) => c && c.url && c.url.trim().length > 0);
+  if (validCovers.length === 0) return undefined;
+
+  const sorted = [...validCovers].sort((a, b) => {
+    const rankA = Math.min(getCoverPriorityRank(a.provider), getCoverPriorityRank(a.url));
+    const rankB = Math.min(getCoverPriorityRank(b.provider), getCoverPriorityRank(b.url));
+    return rankA - rankB;
+  });
+
+  return sorted[0];
+}

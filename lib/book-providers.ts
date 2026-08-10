@@ -199,7 +199,10 @@ export async function batchSearchBooksByProvider(input: {
         include: {
           work: {
             include: {
-              author: true,
+              contributors: {
+                include: { author: true },
+                orderBy: { position: "asc" },
+              },
               genres: { include: { genre: true } },
             },
           },
@@ -229,7 +232,12 @@ export async function batchSearchBooksByProvider(input: {
               provider: "isbndb",
               title: dbEd.title || dbEd.work.canonicalTitle,
               workTitle: dbEd.work.canonicalTitle,
-              author: dbEd.work.author?.name || "Unknown Author",
+              author:
+                dbEd.work.contributors.find(
+                  (item: { isPrimary: boolean }) => item.isPrimary
+                )?.author.name ||
+                dbEd.work.contributors[0]?.author.name ||
+                "Unknown Author",
               cover: defaultCover?.url || "",
               rating: dbEd.work.averageRating ?? undefined,
               publicationDate: dbEd.publicationDate || (dbEd.work.publicationYear ? String(dbEd.work.publicationYear) : undefined),
@@ -356,15 +364,16 @@ export async function getBookDetailsByProvider(input: {
   provider: BookProviderMode;
   slug: string;
   editionId?: number;
+  language?: string;
 }): Promise<NormalizedBookDetailsResponse> {
-  const { provider, slug, editionId: rawEditionId } = input;
+  const { provider, slug, editionId: rawEditionId, language } = input;
   const editionId = rawEditionId && rawEditionId > 0 ? rawEditionId : undefined;
 
   if (provider === "aggregate") {
-    return getDetailsAggregate({ slug, editionId });
+    return getDetailsAggregate({ slug, editionId, language });
   }
 
-  return getDetailsByProviderId(provider, { slug, editionId });
+  return getDetailsByProviderId(provider, { slug, editionId, language });
 }
 
 export async function getBookCoversByProvider(input: {

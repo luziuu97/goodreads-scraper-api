@@ -25,8 +25,8 @@ export function parseProvider(value: string | null): BookProviderMode {
     return "aggregate";
   }
 
-  if (raw === "goodreads") {
-    return "hardcover";
+  if (raw === "goodreads" || raw === "goodreads-dataset") {
+    return "goodreads";
   }
 
   const modes = refreshValidModes();

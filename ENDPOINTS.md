@@ -559,3 +559,65 @@ Use structured book search/details instead.
 | Book details, series details | ~14 days |
 | Book covers, book formats | ~30 days |
 | Empty search / errors | not cached |
+
+---
+
+## Admin Endpoints & IP Security
+
+Management endpoints under `/api/admin/` allow complete CRUD management (Create, Read, Update, Delete) of Works, Editions, Authors, Series, and Genres.
+
+### IP Whitelisting (`ADMIN_ALLOWED_IPS`)
+
+- **Security Guard**: All `/api/admin/*` requests pass through IP restriction middleware (`lib/admin-auth.ts`).
+- **Configuration**: Set `ADMIN_ALLOWED_IPS` in `.env` as a comma-separated list of allowed IPs:
+  ```env
+  ADMIN_ALLOWED_IPS="127.0.0.1, ::1, 192.168.1.100, 203.0.113.5"
+  ```
+- **Default Access**: If `ADMIN_ALLOWED_IPS` is omitted or empty, access defaults to local loopback (`127.0.0.1`, `::1`) for development safety.
+- **Forbidden Response**: Unauthorized IPs receive a `403 Forbidden` JSON response:
+  ```json
+  {
+    "success": false,
+    "error": "Forbidden: Client IP '203.0.113.99' is not authorized to access admin endpoints."
+  }
+  ```
+
+### 1. Works Management
+
+- `GET /api/admin/works`: List works. Query params: `page` (default 1), `limit` (default 20), `query` (search title/slug), `includeRelations` (`true`|`false`).
+- `POST /api/admin/works`: Create a work with scalar fields and optional nested relations (`translations`, `titles`, `contributors`, `genres`, `externalIds`).
+- `GET /api/admin/works/:id`: Get work details by ID or slug.
+- `PUT` / `PATCH /api/admin/works/:id`: Update work fields and replace/modify nested relations.
+- `DELETE /api/admin/works/:id`: Delete work by ID or slug.
+
+### 2. Editions Management
+
+- `GET /api/admin/editions`: List editions. Query params: `page`, `limit`, `workId`, `isbn10`, `isbn13`, `asin`, `query`.
+- `POST /api/admin/editions`: Create an edition for a work (`workId`, `title`, `format`, `isbn10`, `isbn13`, `covers`, `contributors`, `externalIds`).
+- `GET /api/admin/editions/:id`: Get edition details by ID.
+- `PUT` / `PATCH /api/admin/editions/:id`: Update edition fields, covers, contributors, external IDs.
+- `DELETE /api/admin/editions/:id`: Delete edition by ID.
+
+### 3. Authors Management
+
+- `GET /api/admin/authors`: List authors (`page`, `limit`, `query`).
+- `POST /api/admin/authors`: Create author (`name`, `slug`, `externalIds`).
+- `GET /api/admin/authors/:id`: Get author details by ID or slug.
+- `PUT` / `PATCH /api/admin/authors/:id`: Update author (`name`, `slug`, `externalIds`).
+- `DELETE /api/admin/authors/:id`: Delete author.
+
+### 4. Series Management
+
+- `GET /api/admin/series`: List series (`page`, `limit`, `query`).
+- `POST /api/admin/series`: Create series (`canonicalName`, `slug`, `booksCount`, `translations`, `externalIds`, `memberships`).
+- `GET /api/admin/series/:id`: Get series details by ID or slug.
+- `PUT` / `PATCH /api/admin/series/:id`: Update series.
+- `DELETE /api/admin/series/:id`: Delete series.
+
+### 5. Genres Management
+
+- `GET /api/admin/genres`: List all genres.
+- `POST /api/admin/genres`: Create genre (`name`).
+- `PUT` / `PATCH /api/admin/genres/:id`: Update genre name.
+- `DELETE /api/admin/genres/:id`: Delete genre.
+

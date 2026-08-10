@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyAdminAccess } from "@/lib/admin-auth";
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   if (req.nextUrl.pathname.startsWith("/api/")) {
     const timestamp = new Date().toISOString();
     const method = req.method;
@@ -14,10 +15,19 @@ export function middleware(req: NextRequest) {
       ip,
       userAgent,
     });
+
+    if (path.startsWith("/api/admin/")) {
+      const auth = verifyAdminAccess(req);
+      if (!auth.allowed && auth.response) {
+        console.warn(`[ADMIN ACCESS DENIED] IP '${auth.ip}' blocked for path ${path}`);
+        return auth.response;
+      }
+    }
   }
 
   return NextResponse.next();
 }
+
 
 export const config = {
   matcher: "/api/:path*",

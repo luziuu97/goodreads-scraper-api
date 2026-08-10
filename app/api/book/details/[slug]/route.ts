@@ -44,6 +44,7 @@ export async function GET(
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
     const editionIdParam = req.nextUrl.searchParams.get("editionId");
     const rawEditionId = editionIdParam ? Number(editionIdParam) : undefined;
+    const language = req.nextUrl.searchParams.get("language")?.trim() || undefined;
 
     if (
       editionIdParam &&
@@ -58,6 +59,7 @@ export async function GET(
       provider,
       slug: decodeURIComponent(slug),
       editionId: editionId ?? "",
+      language: language ?? "",
     });
     const cachedData = await getCachedResponse(cacheKey);
 
@@ -75,6 +77,7 @@ export async function GET(
       provider,
       slug: decodeURIComponent(slug),
       editionId,
+      language,
     });
 
     const apiResponse = NextResponse.json(responseBody);

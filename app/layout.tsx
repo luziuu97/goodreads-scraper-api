@@ -1,22 +1,14 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ApiProvider } from "@/lib/active-endpoint-context";
-import { ApiSidebar } from "@/components/api-sidebar";
-import { endpoints } from "@/lib/api-endpoints";
+import { TargetApiProvider } from "@/lib/api-target-context";
 
 export const metadata: Metadata = {
-  title: "Goodreads Scraper API",
+  title: "BooksAPI - Structured Metadata & Visual Discovery Engine",
   description:
-    "A modern, RESTful API for accessing Goodreads data. Created as an alternative to the deprecated official Goodreads API.",
+    "A high-performance, structured API & visual platform for books, series, covers, formats, and batch catalog metadata.",
   generator: "Next.js",
-  authors: [
-    {
-      name: "Ebrahim Khalil",
-      url: "https://github.com/ekamid",
-    },
-  ],
-  keywords: ["books", "api", "metadata", "hardcover", "reading", "library"],
-  creator: "Ebrahim Khalil",
+  keywords: ["books", "api", "metadata", "hardcover", "reading", "library", "isbndb", "openlibrary", "booksapi"],
 };
 
 export default function RootLayout({
@@ -25,17 +17,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body>
-        <main className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <html lang="en" className="dark">
+      <body className="bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-white">
+        <TargetApiProvider>
           <ApiProvider>
-            <div className="flex flex-col md:flex-row min-h-screen">
-              <ApiSidebar endpoints={endpoints} />
+            <div className="min-h-screen flex flex-col bg-slate-950">
               {children}
             </div>
           </ApiProvider>
-        </main>
+        </TargetApiProvider>
       </body>
     </html>
   );
 }
+

@@ -26,3 +26,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Goodreads import artifacts
+*.dump
+goodreads-popular-*.dump
+import-report-*.json
+duplicate-candidates-*.json
+scripts/import-goodreads/**/*.dump

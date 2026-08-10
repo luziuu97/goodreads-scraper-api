@@ -1,3 +1,4 @@
+import { goodreadsProvider } from "@/lib/providers/goodreads";
 import { hardcoverProvider } from "@/lib/providers/hardcover";
 import { isbndbProvider } from "@/lib/providers/isbndb";
 import { openLibraryProvider } from "@/lib/providers/openlibrary";
@@ -9,6 +10,7 @@ import type { BookDataProvider, ProviderId } from "@/lib/providers/types";
  * and append it here. Aggregate will pick it up automatically.
  */
 const ACTIVE_PROVIDERS: BookDataProvider[] = [
+  goodreadsProvider,
   isbndbProvider,
   hardcoverProvider,
   openLibraryProvider,

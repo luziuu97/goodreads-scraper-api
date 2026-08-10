@@ -1,0 +1,5 @@
+name: Staging
+variables:
+  - name: url
+    value: https://goodreads-scraper-api-testing.up.railway.app
+    description: ""

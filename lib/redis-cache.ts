@@ -311,3 +311,13 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
     }
   }
 }
+
+export async function clearAllCache(): Promise<void> {
+  memoryCache.clear();
+  const client = await getReadyRedisClient();
+  if (client) {
+    try {
+      await client.flushdb();
+    } catch {}
+  }
+}

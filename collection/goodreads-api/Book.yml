@@ -8,11 +8,11 @@ http:
   url: "{{url}}/api/book/details/:bookId"
   params:
     - name: provider
-      value: hardcover
+      value: goodreads
       type: query
       disabled: true
     - name: editionId
-      value: "32963227"
+      value: "9789703704279"
       type: query
       disabled: true
     - name: reviews
@@ -20,7 +20,7 @@ http:
       type: query
       disabled: true
     - name: bookId
-      value: "1913404"
+      value: "9788408057031"
       type: path
   auth: inherit
 

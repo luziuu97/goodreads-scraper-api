@@ -5,13 +5,13 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/book/search"
+  url: "{{url}}/api/book/search?query=sapo ruperto"
   params:
     - name: query
-      value: pioneer summer
+      value: sapo ruperto
       type: query
     - name: provider
-      value: hardcover
+      value: goodreads
       type: query
       disabled: true
     - name: type
@@ -23,7 +23,7 @@ http:
       type: query
       disabled: true
     - name: language
-      value: en
+      value: es
       type: query
       disabled: true
   auth: inherit

@@ -61,10 +61,9 @@ export async function resolveCanonicalByProviderWorkId(
     return cached.workId;
   }
 
-  const mapping = await prisma.providerMapping.findFirst({
+  const mapping = await prisma.workExternalId.findUnique({
     where: {
-      provider,
-      providerWorkId,
+      provider_externalId: { provider, externalId: providerWorkId },
     },
     select: {
       workId: true,

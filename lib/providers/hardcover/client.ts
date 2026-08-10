@@ -1,4 +1,5 @@
 import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
+import { formatAudioLength } from "@/lib/canonical/constants";
 import { toIso639_1 } from "@/lib/languages";
 import { hardcoverLimiter } from "@/lib/outgoing-rate-limiter";
 
@@ -417,7 +418,7 @@ function classifyContributionRole(role: string | null | undefined): Contribution
   }
 
   if (
-    /\b(narrator|narrated by|reader|read by|performed by|voice actor|voiceover)\b/.test(
+    /\b(narrator|narrated by|reading|reader|read by|performed by|voice actor|voiceover)\b/.test(
       normalized
     )
   ) {
@@ -638,6 +639,10 @@ function normalizeEdition(
   const { language, languageCode } = languageFromEdition(edition.language);
   const { country, countryCode } = countryFromEdition(edition.country);
 
+  const audioInfo = formatAudioLength(
+    typeof (edition as any).audio_seconds === "number" ? (edition as any).audio_seconds : null
+  );
+
   return {
     id: edition.id,
     title: trimToNull(edition.title) || undefined,
@@ -647,6 +652,8 @@ function normalizeEdition(
     format: trimToNull(edition.edition_format),
     publicationDate: trimToNull(edition.release_date),
     pages: typeof edition.pages === "number" ? edition.pages : null,
+    audioLength: audioInfo.audioLength,
+    audioLengthMinutes: audioInfo.audioLengthMinutes,
     publisher: trimToNull(edition.publisher?.name),
     language,
     languageCode,
@@ -696,6 +703,7 @@ function editionSelection(
     rating
     pages
     edition_format
+    audio_seconds
     isbn_10
     isbn_13
     asin
@@ -1485,7 +1493,11 @@ export async function fetchHardcoverBookDetails(
   slugOrId: string,
   options: { editionId?: number } = {}
 ): Promise<HardcoverNormalizedBookDetails> {
-  const numericId = /^\d+$/.test(slugOrId) ? Number(slugOrId) : null;
+  const cleanIsbnStr = slugOrId.replace(/[^0-9Xx]/g, "").toUpperCase();
+  const isIsbn = cleanIsbnStr.length === 10 || cleanIsbnStr.length === 13;
+  const rawNum = /^\d+$/.test(slugOrId) ? Number(slugOrId) : null;
+  const numericId = !isIsbn && rawNum !== null && rawNum <= 2147483647 ? rawNum : null;
+
   const detailsSelection = `
     id
     slug
@@ -1525,6 +1537,95 @@ export async function fetchHardcoverBookDetails(
       ${editionSelection(false, false, true)}
     }
   `;
+
+  if (isIsbn) {
+    const isbnQuery = `
+      query GetEditionByIsbn($isbn: String!) {
+        editions(where: { _or: [{ isbn_10: { _eq: $isbn } }, { isbn_13: { _eq: $isbn } }] }, limit: 1) {
+          ${editionSelection(true, false, true)}
+          book {
+            ${detailsSelection}
+          }
+        }
+      }
+    `;
+
+    try {
+      const isbnData = await hardcoverGraphQLRequest<{
+        editions?: Array<HardcoverEditionDetails & { book?: HardcoverDetailsBook }>;
+      }>(isbnQuery, { isbn: cleanIsbnStr });
+
+      const matchedEd = Array.isArray(isbnData.editions) ? isbnData.editions[0] : null;
+      if (matchedEd && matchedEd.book) {
+        const book = matchedEd.book;
+        const edition = matchedEd;
+        const series = getSeriesLabel(book);
+        const seriesURL = getSeriesUrl(book);
+        const contributors = resolveContributors(book.contributions, edition.contributions);
+        const { language, languageCode } = languageFromEdition(edition.language);
+        const { country, countryCode } = countryFromEdition(edition.country);
+        const normalizedEdition = normalizeEdition(edition) || null;
+
+        const rating =
+          typeof book.rating === "number" && Number.isFinite(book.rating)
+            ? book.rating.toFixed(2)
+            : "";
+
+        const audioInfo = formatAudioLength(
+          typeof (edition as any)?.audio_seconds === "number" ? (edition as any).audio_seconds : null
+        );
+
+        const displayTitle = trimToNull(edition.title) || book.title;
+
+        return {
+          scrapedURL: `https://hardcover.app/books/${book.slug}`,
+          book: {
+            cover: toCoverUrl(edition.image || null) || toCoverUrl(book.image),
+            series,
+            seriesURL,
+            pages: typeof edition.pages === "number" ? edition.pages : null,
+            audioLength: audioInfo.audioLength,
+            audioLengthMinutes: audioInfo.audioLengthMinutes,
+            slug: book.slug,
+            title: displayTitle,
+            author: contributors.authors,
+            translator: contributors.translators[0] || null,
+            translators: contributors.translators,
+            illustrators: contributors.illustrators,
+            narrators: contributors.narrators,
+            editors: contributors.editors,
+            otherContributors: contributors.other,
+            rating,
+            ratingCount: typeof book.ratings_count === "number" ? String(book.ratings_count) : "",
+            reviewsCount: typeof book.reviews_count === "number" ? String(book.reviews_count) : "",
+            description: formatBookDescription(book.headline, book.description),
+            genres: getEditionGenres(book.cached_tags ?? null) || [],
+            bookEdition: edition.edition_format || null,
+            publishDate: edition.release_date || book.release_date || null,
+            isbn: edition.isbn_13 || null,
+            isbn10: edition.isbn_10 || null,
+            asin: edition.asin || null,
+            language,
+            languageCode,
+            country,
+            countryCode,
+            publishedBy: edition.publisher?.name || null,
+            type: edition.edition_format || null,
+            edition: normalizedEdition,
+            related: [],
+            reviewBreakdown: { rating5: "0", rating4: "0", rating3: "0", rating2: "0", rating1: "0" },
+            quotes: "",
+            quotesURL: "",
+            questions: "",
+            questionsURL: "",
+            lastScraped: new Date().toISOString(),
+          },
+        };
+      }
+    } catch (isbnErr) {
+      console.warn(`[Hardcover GraphQL] ISBN lookup failed for "${cleanIsbnStr}":`, isbnErr);
+    }
+  }
 
   const detailsQuery = numericId !== null
     ? `

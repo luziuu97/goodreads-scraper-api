@@ -109,7 +109,7 @@ export async function GET(
             const languageMatches =
               !requestedLanguage ||
               requestedLanguage === "original" ||
-              edition.language.toLowerCase() === requestedLanguage;
+              edition.language?.toLowerCase() === requestedLanguage;
             const formatMatches =
               !requestedFormat ||
               edition.format === requestedFormat ||

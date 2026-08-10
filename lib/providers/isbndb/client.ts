@@ -202,6 +202,20 @@ export async function searchIsbndb(
   }
 
   const results = rawBooks.map(mapIsbndbBookToSearchBook);
+
+  const normQuery = query.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+  if (normQuery.length >= 3) {
+    for (const book of results) {
+      if (book.workTitle) {
+        const normTitle = (book.title || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+        const normWork = book.workTitle.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+        if (!normTitle.includes(normQuery) && normWork.includes(normQuery)) {
+          book.title = book.workTitle;
+        }
+      }
+    }
+  }
+
   await setCachedResponse(cacheKey, results, CACHE_TTL_SEARCH);
   return results;
 }
