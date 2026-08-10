@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
-import { getBookCoversByProvider, parseProvider } from "@/lib/book-providers";
+import { getBookCoversByProvider, parseProvider } from "@/lib/v0/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_COVER,
@@ -78,7 +78,7 @@ export async function GET(
       slug: decodedSlug,
       limit,
       onlyWithCover: onlyWithCover ? "1" : "0",
-    });
+    }, "v0");
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {

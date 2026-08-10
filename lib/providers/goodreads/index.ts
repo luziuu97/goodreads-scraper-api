@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { selectBestCover } from "@/lib/canonical/constants";
 import type {
   BookCoversInput,
   BookDataProvider,

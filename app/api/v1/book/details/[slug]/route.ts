@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
-import { getSeriesDetailsByProvider, parseProvider } from "@/lib/v0/book-providers";
+import { getBookDetailsByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_DETAILS,
@@ -15,7 +15,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   try {
-    await API_CONFIG.publicRateLimit.check(req, "get_series_details");
+    await API_CONFIG.publicRateLimit.check(req, "get_book_details");
   } catch {
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
@@ -27,59 +27,40 @@ export async function GET(
 
   try {
     const { slug } = await params;
-    const decodedSlug = decodeURIComponent(slug);
 
-    if (!decodedSlug.trim()) {
-      return NextResponse.json(
+    if (req.nextUrl.searchParams.get("reviews") === "true") {
+      const gone = NextResponse.json(
         {
           success: false,
-          error: "Series slug or id is required",
+          error:
+            "reviews=true is no longer supported. Goodreads HTML review scraping has been removed.",
         },
         { status: 400 }
       );
+      gone.headers.set("Cache-Control", "no-store");
+      return gone;
     }
 
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
+    const editionIdParam = req.nextUrl.searchParams.get("editionId");
+    const rawEditionId = editionIdParam ? Number(editionIdParam) : undefined;
+    const language = req.nextUrl.searchParams.get("language")?.trim() || undefined;
 
-    const limitParam = req.nextUrl.searchParams.get("limit");
-    const limit = limitParam
-      ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100)
-      : 50;
-
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Invalid limit parameter. Must be a number between 1 and 100",
-        },
-        { status: 400 }
-      );
+    if (
+      editionIdParam &&
+      (!Number.isInteger(rawEditionId) || typeof rawEditionId !== "number" || rawEditionId < 0)
+    ) {
+      throw new Error("Invalid editionId parameter. Must be a non-negative integer");
     }
 
-    const offsetParam = req.nextUrl.searchParams.get("offset");
-    const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
+    const editionId = rawEditionId && rawEditionId > 0 ? rawEditionId : undefined;
 
-    if (offsetParam && (Number.isNaN(offset) || offset < 0)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Invalid offset parameter. Must be a non-negative integer",
-        },
-        { status: 400 }
-      );
-    }
-
-    const language = req.nextUrl.searchParams.get("language") || "original";
-    const format = req.nextUrl.searchParams.get("format") || undefined;
-
-    const cacheKey = buildLogicalCacheKey("get_series_details", {
+    const cacheKey = buildLogicalCacheKey("get_book_details", {
       provider,
-      slug: decodedSlug,
-      limit,
-      offset,
-      language,
-      format: format || "",
-    }, "v0");
+      slug: decodeURIComponent(slug),
+      editionId: editionId ?? "",
+      language: language ?? "",
+    }, "v1");
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {
@@ -92,13 +73,11 @@ export async function GET(
       return cachedResponse;
     }
 
-    const responseBody = await getSeriesDetailsByProvider({
+    const responseBody = await getBookDetailsByProvider({
       provider,
-      slug: decodedSlug,
-      limit,
-      offset,
+      slug: decodeURIComponent(slug),
+      editionId,
       language,
-      format,
     });
 
     const apiResponse = NextResponse.json(responseBody);
@@ -116,20 +95,19 @@ export async function GET(
     const stack = error instanceof Error ? error.stack : undefined;
     const status =
       message.includes("Invalid provider parameter") ||
-      message.includes("Invalid limit parameter") ||
-      message.includes("Invalid offset parameter") ||
-      message.includes("Invalid language parameter") ||
-      message.includes("Invalid format parameter") ||
+      message.includes("Invalid editionId parameter") ||
       message.includes("Goodreads HTML provider has been removed")
         ? 400
         : message.includes("HARDCOVER_API_TOKEN") ||
             message.includes("No configured book metadata providers")
           ? 503
-          : message.includes("No Hardcover series found")
+          : message.includes("No Hardcover book found") ||
+              message.includes("No Hardcover edition found") ||
+              message.includes("does not belong to book")
             ? 404
             : 500;
 
-    console.error(`[API /api/series/details] Error ${status}:`, {
+    console.error(`[API /api/book/details] Error ${status}:`, {
       url: req.url,
       error: message,
       stack,

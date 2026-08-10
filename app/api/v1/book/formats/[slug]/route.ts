@@ -84,7 +84,7 @@ export async function GET(
       limit,
       language: language?.trim() || "",
       format: format?.trim() || "",
-    }, "v0");
+    }, "v1");
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {

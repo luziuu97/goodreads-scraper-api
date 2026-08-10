@@ -1,10 +1,14 @@
-# API Endpoints
+# API Endpoints & Versioning
 
-Structured book metadata API. Goodreads HTML scraping has been removed from book routes. Default mode is **aggregate** (all registered providers: **Hardcover**, **ISBNDB**, and **OpenLibrary**).
+Structured book metadata API supporting dual versioning:
 
-## Base URL
+- **`v0` (Legacy / Unversioned)**: `/api/...` (e.g. `/api/book/search`) — Stateless real-time live multi-provider aggregation (Hardcover, ISBNdb, OpenLibrary). No local database required.
+- **`v1` (Canonical Database Engine)**: `/api/v1/...` (e.g. `/api/v1/book/search`, `/api/v1/admin/works`) — High-performance canonical database engine backed by local Goodreads dumps, Prisma staging database, and administrative CRUD workflows.
 
-All endpoints are prefixed with `/api`.
+## Base URLs
+
+- **Legacy / Live Aggregation (v0)**: `/api/...`
+- **Canonical DB Engine (v1)**: `/api/v1/...`
 
 ---
 

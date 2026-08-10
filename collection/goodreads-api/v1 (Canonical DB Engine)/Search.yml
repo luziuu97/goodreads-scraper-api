@@ -1,0 +1,35 @@
+info:
+  name: Search
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{url}}/api/v1/book/search?query=harry potter"
+  params:
+    - name: query
+      value: harry potter
+      type: query
+    - name: provider
+      value: goodreads
+      type: query
+      disabled: true
+    - name: type
+      value: all
+      type: query
+      disabled: true
+    - name: limit
+      value: "10"
+      type: query
+      disabled: true
+    - name: language
+      value: es
+      type: query
+      disabled: true
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

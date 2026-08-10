@@ -4,7 +4,7 @@ import {
   parseProvider,
   searchSeriesByProvider,
   type NormalizedSeriesSearchResponse,
-} from "@/lib/v0/book-providers";
+} from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
       provider,
       limit,
       query: query.trim(),
-    }, "v0");
+    }, "v1");
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {

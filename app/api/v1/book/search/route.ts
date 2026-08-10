@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
 import {
   parseProvider,
-  searchSeriesByProvider,
-  type NormalizedSeriesSearchResponse,
-} from "@/lib/v0/book-providers";
+  searchBooksByProvider,
+  type NormalizedSearchResponse,
+} from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
@@ -14,14 +14,26 @@ import {
 
 export const runtime = "nodejs";
 
-function hasSeriesResults(response: NormalizedSeriesSearchResponse): boolean {
-  return Array.isArray(response.results.series) && response.results.series.length > 0;
+function hasSearchResults(response: NormalizedSearchResponse): boolean {
+  return Array.isArray(response.results.books) && response.results.books.length > 0;
 }
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now();
+  let query: string | null = null;
+  let providerStr: string | null = null;
+  let type: string = "all";
+  let limit: number = 10;
+  let language: string | undefined = undefined;
+
   try {
-    await API_CONFIG.publicRateLimit.check(req, "search_series");
+    await API_CONFIG.publicRateLimit.check(req, "search_books");
   } catch {
+    console.warn(`[API /api/book/search] 429 Rate limit exceeded:`, {
+      url: req.url,
+      ip: req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown",
+      userAgent: req.headers.get("user-agent"),
+    });
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
       { status: 429 }
@@ -33,7 +45,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const query = searchParams.get("query");
+    query = searchParams.get("query");
     if (!query || query.trim() === "") {
       return NextResponse.json(
         { error: "Query parameter is required" },
@@ -41,25 +53,54 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const provider = parseProvider(searchParams.get("provider"));
+    providerStr = searchParams.get("provider");
+    const provider = parseProvider(providerStr);
+
+    type = searchParams.get("type") || "all";
+    const validTypes = ["all", "title", "author", "isbn"];
+    if (!validTypes.includes(type)) {
+      return NextResponse.json(
+        {
+          error: "Invalid type parameter. Valid options: " + validTypes.join(", "),
+        },
+        { status: 400 }
+      );
+    }
 
     const limitParam = searchParams.get("limit");
-    const limit = limitParam
+    limit = limitParam
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 50)
       : 10;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
       return NextResponse.json(
         { error: "Invalid limit parameter. Must be a number between 1 and 50" },
         { status: 400 }
       );
     }
 
-    const cacheKey = buildLogicalCacheKey("search_series", {
+    const languageParam = searchParams.get("language");
+    language = languageParam?.trim() || undefined;
+    if (language) {
+      const code = language.toLowerCase().split(/[-_]/)[0] || "";
+      if (!/^[a-z]{2,3}$/.test(code)) {
+        return NextResponse.json(
+          {
+            error:
+              "Invalid language parameter. Use an ISO code like en or es",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const cacheKey = buildLogicalCacheKey("search_books", {
       provider,
+      type,
       limit,
       query: query.trim(),
-    }, "v0");
+      language: language || "",
+    }, "v1");
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {
@@ -68,16 +109,18 @@ export async function GET(req: NextRequest) {
       return cachedResponse;
     }
 
-    const responseData = await searchSeriesByProvider({
+    const responseData = await searchBooksByProvider({
       provider,
       query: query.trim(),
       limit,
+      type,
+      language,
     });
 
     const apiResponse = NextResponse.json(responseData);
     apiResponse.headers.set("X-Cache", "MISS");
 
-    if (hasSeriesResults(responseData)) {
+    if (hasSearchResults(responseData)) {
       await setCachedResponse(cacheKey, responseData, CACHE_TTL_SEARCH);
     } else {
       apiResponse.headers.set("Cache-Control", "no-store");
@@ -85,7 +128,8 @@ export async function GET(req: NextRequest) {
 
     return apiResponse;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown series search error";
+    const durationMs = Date.now() - startTime;
+    const message = error instanceof Error ? error.message : "Unknown search error";
     const stack = error instanceof Error ? error.stack : undefined;
     const status =
       message.includes("Invalid provider parameter") ||
@@ -96,8 +140,9 @@ export async function GET(req: NextRequest) {
           ? 503
           : 500;
 
-    console.error(`[API /api/series/search] Error ${status}:`, {
+    console.error(`[API /api/book/search] Error ${status} (${durationMs}ms):`, {
       url: req.url,
+      params: { query, provider: providerStr, type, limit, language },
       error: message,
       stack,
     });

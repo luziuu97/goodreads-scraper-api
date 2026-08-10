@@ -151,9 +151,9 @@ export function canonicalWorkToSearchBook(
   query?: string
 ): NormalizedSearchBook {
   const detectedLang = !language ? detectQueryLanguageMatch(work, query) : undefined;
-  const effectiveLang = language || (detectedLang ? toIso639_1(detectedLang) : undefined);
+  const effectiveLang = language || (detectedLang ? toIso639_1(detectedLang) || undefined : undefined);
 
-  const edition = preferredEdition(work, effectiveLang, isbn, query);
+  const edition = preferredEdition(work, effectiveLang, isbn || undefined, query);
   const coverObj = selectBestCover(edition?.covers) || selectBestCover(work.editions?.flatMap((e: any) => e.covers || []));
   const translation = effectiveLang
     ? work.translations.find((item: any) => toIso639_1(item.language) === effectiveLang || item.language === effectiveLang)

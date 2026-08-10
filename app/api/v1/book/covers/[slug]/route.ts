@@ -1,21 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
-import { getSeriesDetailsByProvider, parseProvider } from "@/lib/v0/book-providers";
+import { getBookCoversByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
-  CACHE_TTL_DETAILS,
+  CACHE_TTL_COVER,
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
 
 export const revalidate = 3600;
 
+function parseBooleanParam(value: string | null, defaultValue: boolean): boolean {
+  if (value === null || value.trim() === "") {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error("Invalid onlyWithCover parameter. Use true or false");
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   try {
-    await API_CONFIG.publicRateLimit.check(req, "get_series_details");
+    await API_CONFIG.publicRateLimit.check(req, "get_book_covers");
   } catch {
     const rateLimitResponse = NextResponse.json(
       { error: "Too Many Requests" },
@@ -33,13 +49,17 @@ export async function GET(
       return NextResponse.json(
         {
           success: false,
-          error: "Series slug or id is required",
+          error: "Book slug or id is required",
         },
         { status: 400 }
       );
     }
 
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
+    const onlyWithCover = parseBooleanParam(
+      req.nextUrl.searchParams.get("onlyWithCover"),
+      true
+    );
 
     const limitParam = req.nextUrl.searchParams.get("limit");
     const limit = limitParam
@@ -48,38 +68,17 @@ export async function GET(
 
     if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "Invalid limit parameter. Must be a number between 1 and 100",
-        },
+        { success: false, error: "Invalid limit parameter. Must be a number between 1 and 100" },
         { status: 400 }
       );
     }
 
-    const offsetParam = req.nextUrl.searchParams.get("offset");
-    const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
-
-    if (offsetParam && (Number.isNaN(offset) || offset < 0)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Invalid offset parameter. Must be a non-negative integer",
-        },
-        { status: 400 }
-      );
-    }
-
-    const language = req.nextUrl.searchParams.get("language") || "original";
-    const format = req.nextUrl.searchParams.get("format") || undefined;
-
-    const cacheKey = buildLogicalCacheKey("get_series_details", {
+    const cacheKey = buildLogicalCacheKey("get_book_covers", {
       provider,
       slug: decodedSlug,
       limit,
-      offset,
-      language,
-      format: format || "",
-    }, "v0");
+      onlyWithCover: onlyWithCover ? "1" : "0",
+    }, "v1");
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {
@@ -92,13 +91,11 @@ export async function GET(
       return cachedResponse;
     }
 
-    const responseBody = await getSeriesDetailsByProvider({
+    const responseBody = await getBookCoversByProvider({
       provider,
       slug: decodedSlug,
       limit,
-      offset,
-      language,
-      format,
+      onlyWithCover,
     });
 
     const apiResponse = NextResponse.json(responseBody);
@@ -108,7 +105,7 @@ export async function GET(
     );
     apiResponse.headers.set("X-Cache", "MISS");
 
-    await setCachedResponse(cacheKey, responseBody, CACHE_TTL_DETAILS);
+    await setCachedResponse(cacheKey, responseBody, CACHE_TTL_COVER);
 
     return apiResponse;
   } catch (error) {
@@ -116,20 +113,18 @@ export async function GET(
     const stack = error instanceof Error ? error.stack : undefined;
     const status =
       message.includes("Invalid provider parameter") ||
+      message.includes("Invalid onlyWithCover parameter") ||
       message.includes("Invalid limit parameter") ||
-      message.includes("Invalid offset parameter") ||
-      message.includes("Invalid language parameter") ||
-      message.includes("Invalid format parameter") ||
       message.includes("Goodreads HTML provider has been removed")
         ? 400
         : message.includes("HARDCOVER_API_TOKEN") ||
             message.includes("No configured book metadata providers")
           ? 503
-          : message.includes("No Hardcover series found")
+          : message.includes("No Hardcover book found")
             ? 404
             : 500;
 
-    console.error(`[API /api/series/details] Error ${status}:`, {
+    console.error(`[API /api/book/covers] Error ${status}:`, {
       url: req.url,
       error: message,
       stack,

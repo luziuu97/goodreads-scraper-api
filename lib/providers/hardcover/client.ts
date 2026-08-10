@@ -187,6 +187,8 @@ export type HardcoverNormalizedEdition = {
   format: string | null;
   publicationDate: string | null;
   pages: number | null;
+  audioLength?: string | null;
+  audioLengthMinutes?: number | null;
   publisher: string | null;
   language: string | null;
   languageCode: string | null;
@@ -202,6 +204,8 @@ export type HardcoverNormalizedBookDetails = {
     series: string;
     seriesURL: string;
     pages: number | null;
+    audioLength?: string | null;
+    audioLengthMinutes?: number | null;
     slug: string;
     title: string;
     author: HardcoverContributor[];
