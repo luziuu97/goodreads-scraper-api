@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import {
   detectImageFormat,
+  getCoverPriorityRank,
   isTextInLanguage,
   normalizeAuthorSlug,
   normalizeBookFormat,
