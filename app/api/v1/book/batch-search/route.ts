@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
   try {
     await API_CONFIG.publicRateLimit.checkBatch(req, "batch_search_books");
   } catch {
-    console.warn(`[API /api/book/batch-search] 429 Rate limit exceeded:`, {
+    console.warn(`[API /api/v1/book/batch-search] 429 Rate limit exceeded:`, {
       url: req.url,
       ip: req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown",
       userAgent: req.headers.get("user-agent"),
@@ -62,10 +62,34 @@ export async function POST(req: NextRequest) {
     }
 
     const provider = parseProvider(providerParam);
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+
+    console.log(`[API /api/v1/book/batch-search] Received request for ${items.length} item(s):`, {
+      provider,
+      items: items.map((item: any, idx: number) => ({
+        index: idx,
+        query: item.query || undefined,
+        isbn: item.isbn || undefined,
+        title: item.title || undefined,
+        author: item.author || undefined,
+        type: item.type || undefined,
+        language: item.language || undefined,
+        limit: item.limit || undefined,
+      })),
+      ip,
+    });
 
     const batchResults = await batchSearchBooksByProvider({
       provider,
       items: items as BatchSearchItemInput[],
+    });
+
+    const durationMs = Date.now() - startTime;
+    console.log(`[API /api/v1/book/batch-search] Completed in ${durationMs}ms (${batchResults.successfulItems}/${batchResults.totalItems} successful):`, {
+      provider,
+      totalItems: batchResults.totalItems,
+      successfulItems: batchResults.successfulItems,
+      failedItems: batchResults.failedItems,
     });
 
     const response = NextResponse.json(batchResults);
@@ -83,7 +107,7 @@ export async function POST(req: NextRequest) {
           ? 503
           : 500;
 
-    console.error(`[API /api/book/batch-search] Error ${status} (${durationMs}ms):`, {
+    console.error(`[API /api/v1/book/batch-search] Error ${status} (${durationMs}ms):`, {
       url: req.url,
       error: message,
       stack,

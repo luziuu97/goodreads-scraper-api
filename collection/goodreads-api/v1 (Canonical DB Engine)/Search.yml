@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/book/search?query=wedding people"
+  url: "{{url}}/api/v1/book/search?query=pioneer winter"
   params:
     - name: query
-      value: wedding people
+      value: pioneer winter
       type: query
     - name: provider
       value: goodreads
@@ -19,7 +19,7 @@ http:
       type: query
       disabled: true
     - name: limit
-      value: "10"
+      value: "1"
       type: query
       disabled: true
     - name: language

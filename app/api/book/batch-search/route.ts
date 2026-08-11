@@ -62,10 +62,34 @@ export async function POST(req: NextRequest) {
     }
 
     const provider = parseProvider(providerParam);
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+
+    console.log(`[API /api/book/batch-search] Received request for ${items.length} item(s):`, {
+      provider,
+      items: items.map((item: any, idx: number) => ({
+        index: idx,
+        query: item.query || undefined,
+        isbn: item.isbn || undefined,
+        title: item.title || undefined,
+        author: item.author || undefined,
+        type: item.type || undefined,
+        language: item.language || undefined,
+        limit: item.limit || undefined,
+      })),
+      ip,
+    });
 
     const batchResults = await batchSearchBooksByProvider({
       provider,
       items: items as BatchSearchItemInput[],
+    });
+
+    const durationMs = Date.now() - startTime;
+    console.log(`[API /api/book/batch-search] Completed in ${durationMs}ms (${batchResults.successfulItems}/${batchResults.totalItems} successful):`, {
+      provider,
+      totalItems: batchResults.totalItems,
+      successfulItems: batchResults.successfulItems,
+      failedItems: batchResults.failedItems,
     });
 
     const response = NextResponse.json(batchResults);

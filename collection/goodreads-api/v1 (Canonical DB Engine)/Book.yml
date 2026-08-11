@@ -12,7 +12,7 @@ http:
       type: query
       disabled: true
     - name: editionId
-      value: "9789703704279"
+      value: "9788478884452"
       type: query
       disabled: true
     - name: reviews
@@ -20,7 +20,7 @@ http:
       type: query
       disabled: true
     - name: bookId
-      value: "9788408057031"
+      value: "9781419773129"
       type: path
   auth: inherit
 
