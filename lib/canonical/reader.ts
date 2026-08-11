@@ -415,7 +415,18 @@ export function canonicalWorkToDetails(
     descriptionLanguage = toIso639_1(edition.language);
   }
 
-  const rawTitle = translation?.title || edition?.title || work.canonicalTitle;
+  // Use the translation title only when it actually reflects the target language
+  // (i.e. it differs from the canonical English work title).  If the stored
+  // translation title matches the canonical title it was likely written from an
+  // English ingest pass and the edition title is a more accurate source.
+  const translationTitle =
+    translation?.title &&
+    (effectiveIso === "en" ||
+      normalizeSearchText(translation.title) !==
+        normalizeSearchText(work.canonicalTitle))
+      ? translation.title
+      : null;
+  const rawTitle = translationTitle || edition?.title || work.canonicalTitle;
   const displayTitle = rawTitle.replace(/\s*\([^)]*#\d+[^)]*\)/gi, "").trim() || rawTitle;
 
   const normalizedMatchedEdition = edition

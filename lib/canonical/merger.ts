@@ -450,18 +450,35 @@ export async function upsertCanonicalWorkFromProvider(
     });
     const finalDesc = validLanguageDesc || (existingTrans?.description && isTextInLanguage(existingTrans.description, langCode) ? existingTrans.description : null);
 
+    // Guard: do not overwrite an already-stored non-English translation title
+    // with the canonical (English) work title.  This can happen when the same
+    // work is re-ingested via the slug/English path after the translated title
+    // has been correctly stored from an ISBN/edition-specific lookup.
+    const incomingTitleEqualsCanonical =
+      normalizeSearchText(title) === normalizeSearchText(canonicalTitleStr);
+    const existingTitleIsTranslated =
+      existingTrans?.title &&
+      normalizeSearchText(existingTrans.title) !== normalizeSearchText(canonicalTitleStr);
+    const shouldKeepExistingTitle =
+      langCode !== "en" &&
+      incomingTitleEqualsCanonical &&
+      existingTitleIsTranslated;
+    const finalTitle = shouldKeepExistingTitle
+      ? existingTrans!.title
+      : title.trim();
+
     await prisma.workTranslation.upsert({
       where: {
         workId_language: { workId, language: langCode },
       },
       update: {
-        title: title.trim(),
+        title: finalTitle,
         description: finalDesc || undefined,
       },
       create: {
         workId,
         language: langCode,
-        title: title.trim(),
+        title: finalTitle,
         description: finalDesc || null,
       },
     });

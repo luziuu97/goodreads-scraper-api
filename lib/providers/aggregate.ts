@@ -607,6 +607,27 @@ export async function searchAggregate(
   };
 }
 
+/**
+ * Normalize a provider's translator list to the shape the merger expects.
+ * Hardcover returns HardcoverContributor[] (objects), search results return
+ * string[].  Both formats are accepted here.
+ */
+function normalizeTranslatorList(
+  translators: unknown
+): Array<{ name: string }> | undefined {
+  if (!Array.isArray(translators) || translators.length === 0) return undefined;
+  const result = translators
+    .map((t) =>
+      typeof t === "string" && t.trim()
+        ? { name: t.trim() }
+        : t && typeof (t as any).name === "string" && (t as any).name.trim()
+        ? { name: (t as any).name.trim() }
+        : null
+    )
+    .filter((t): t is { name: string } => t !== null);
+  return result.length > 0 ? result : undefined;
+}
+
 export async function getDetailsAggregate(
   input: BookDetailsInput
 ): Promise<NormalizedBookDetailsResponse> {
@@ -614,10 +635,34 @@ export async function getDetailsAggregate(
     const localWork = await findCanonicalWork(input.slug);
     if (localWork) {
       const primaryEdition = localWork.editions?.[0];
+
+      // When the request is for a specific non-English edition (identified by
+      // ISBN), we also require that edition-level translator data has been
+      // ingested before treating the cached work as complete.  Without this
+      // check, a work that was first ingested via the English slug path will
+      // always short-circuit here, never fetching the translator from Hardcover.
+      const requestedIsbn = (() => {
+        const v = input.slug.trim();
+        const clean = v.replace(/[^0-9Xx]/g, "").toUpperCase();
+        return clean.length === 10 || clean.length === 13 ? clean : null;
+      })();
+      const matchedEditionByIsbn = requestedIsbn
+        ? (localWork.editions || []).find((ed: any) =>
+            [ed.isbn13, ed.isbn10, ed.asin].includes(requestedIsbn)
+          )
+        : null;
+      const isNonEnglishEditionRequest =
+        matchedEditionByIsbn &&
+        toIso639_1((matchedEditionByIsbn as any).language) !== "en";
+      const hasEditionTranslators =
+        !isNonEnglishEditionRequest ||
+        (localWork.contributors || []).some((c: any) => c.role === "TRANSLATOR");
+
       const hasCompleteData =
         localWork.translations?.some((t: any) => t.description?.trim()) &&
         primaryEdition?.publisher &&
-        primaryEdition?.pages;
+        primaryEdition?.pages &&
+        hasEditionTranslators;
 
       if (hasCompleteData) {
         return canonicalWorkToDetails(localWork, input.language, input.slug);
@@ -847,9 +892,9 @@ export async function getDetailsAggregate(
           genres: cleanGenres,
           seriesName: typeof b.series === "string" ? b.series.replace(/\s*#\d+.*$/, "") : (b.series?.name || b.seriesName),
           seriesPosition: b.series?.position || b.seriesPosition,
-          translators: b.translators,
-          illustrators: b.illustrators,
-          narrators: b.narrators,
+          translators: normalizeTranslatorList(b.translators),
+          illustrators: normalizeTranslatorList(b.illustrators),
+          narrators: normalizeTranslatorList(b.narrators),
         }).catch((err) => console.error("Canonical detail ingest error:", err));
       }
     })
