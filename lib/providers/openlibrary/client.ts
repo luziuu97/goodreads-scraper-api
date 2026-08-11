@@ -8,6 +8,7 @@ import type {
   NormalizedSearchBook,
 } from "@/lib/providers/types";
 
+import { normalizeLanguage } from "@/lib/canonical/constants";
 import { toIso639_1, toIso639_2 } from "@/lib/languages";
 
 const OPEN_LIBRARY_BASE = "https://openlibrary.org";
@@ -140,8 +141,8 @@ export async function searchOpenLibrary(
       genres: doc.subject?.slice(0, 10),
       isbn: isbn13,
       isbn10: isbn10,
-      language: doc.language?.[0] ?? null,
-      languageCode: doc.language?.[0] ?? null,
+      language: normalizeLanguage(doc.language?.[0]),
+      languageCode: normalizeLanguage(doc.language?.[0]),
       presentation: "work",
       sources: [
         {

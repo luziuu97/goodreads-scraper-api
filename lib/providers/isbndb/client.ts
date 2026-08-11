@@ -68,6 +68,8 @@ function cleanIsbn(raw?: string | null): string | null {
   return clean.length === 10 || clean.length === 13 ? clean : null;
 }
 
+import { normalizeLanguage, roundRating } from "@/lib/canonical/constants";
+
 function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
   const isbn13 = cleanIsbn(b.isbn13 || b.isbn);
   const isbn10 = cleanIsbn(b.isbn10);
@@ -78,6 +80,7 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
     : "Unknown Author";
   const cover = b.image || "";
   const pubDate = b.date_published || b.publish_date || undefined;
+  const lang = normalizeLanguage(b.language);
 
   return {
     id,
@@ -90,7 +93,8 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
     genres: Array.isArray(b.subjects) && b.subjects.length > 0 ? b.subjects : undefined,
     isbn: isbn13 || isbn10 || null,
     isbn10: isbn10 || null,
-    language: b.language || null,
+    language: lang,
+    languageCode: lang,
     presentation: "isbn",
     sources: [
       {
@@ -108,8 +112,8 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
       publicationDate: pubDate || null,
       pages: typeof b.pages === "number" ? b.pages : null,
       publisher: b.publisher || null,
-      language: b.language || null,
-      languageCode: null,
+      language: lang,
+      languageCode: lang,
       country: null,
       countryCode: null,
       cover,

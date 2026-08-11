@@ -20,7 +20,7 @@ import type {
   SeriesDetailsInput,
   SeriesSearchInput,
 } from "@/lib/providers/types";
-import { isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, pickBestCoverUrl, selectBestCover } from "@/lib/canonical/constants";
+import { isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, pickBestCoverUrl, selectBestCover, normalizeLanguage, roundRating } from "@/lib/canonical/constants";
 import { getImageDimensions } from "@/lib/utils/image-size";
 import { toIso639_1 } from "@/lib/languages";
 
@@ -164,8 +164,10 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
   const isbn = primaryHit.isbn || secondaryHit.isbn || null;
   const isbn10 = primaryHit.isbn10 || secondaryHit.isbn10 || null;
   const publicationDate = primaryHit.publicationDate || secondaryHit.publicationDate || undefined;
-  const language = primaryHit.language || secondaryHit.language || null;
-  const languageCode = primaryHit.languageCode || secondaryHit.languageCode || null;
+  const language = normalizeLanguage(primaryHit.language || secondaryHit.language);
+  const languageCode = normalizeLanguage(primaryHit.languageCode || secondaryHit.languageCode);
+  const rawRating = primaryHit.rating ?? secondaryHit.rating;
+  const rating = roundRating(rawRating) ?? undefined;
 
   return {
     id: primaryHit.id || secondaryHit.id,
@@ -174,7 +176,7 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
     workTitle: primaryHit.workTitle || secondaryHit.workTitle || primaryHit.title,
     author: primaryHit.author || secondaryHit.author,
     cover,
-    rating: primaryHit.rating ?? secondaryHit.rating,
+    rating,
     publicationDate,
     genres: cleanGenres.length > 0 ? cleanGenres : undefined,
     isbn,
@@ -212,7 +214,7 @@ function buildEditionsArray(
     editions.push({
       isbn: isbn ?? null,
       isbn10: isbn10 ?? null,
-      language: m.language ?? m.edition?.language ?? null,
+      language: normalizeLanguage(m.language ?? m.edition?.language) ?? null,
       format: (m.edition?.format ?? null)?.toLowerCase() ?? null,
       publicationDate: m.publicationDate ?? m.edition?.publicationDate ?? null,
       cover: edCover || undefined,
@@ -305,6 +307,17 @@ export async function groupAndMergeByWork(
         finalRepresentative.title = finalRepresentative.workTitle;
       }
     }
+
+    // Pick best cover across all members in the work group (Hardcover > non-Goodreads > Goodreads)
+    const allMemberCovers = members.flatMap((m) => [m.cover, m.edition?.cover, ...(m.editions?.map((e) => e.cover) || [])]);
+    const bestGroupCover = pickBestCoverUrl(allMemberCovers);
+    if (bestGroupCover) {
+      finalRepresentative.cover = bestGroupCover;
+    }
+
+    finalRepresentative.rating = roundRating(finalRepresentative.rating) ?? undefined;
+    finalRepresentative.language = normalizeLanguage(finalRepresentative.language);
+    finalRepresentative.languageCode = normalizeLanguage(finalRepresentative.languageCode);
 
     const editions = buildEditionsArray(members);
     results.push({

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { selectBestCover } from "@/lib/canonical/constants";
+import { canonicalWorkToSearchBook } from "@/lib/canonical/reader";
 import type {
   BookCoversInput,
   BookDataProvider,
@@ -103,102 +104,11 @@ export const goodreadsProvider: BookDataProvider = {
       },
     });
 
-    const targetLangParam = language?.toLowerCase();
-    const normQuery = query.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-
     return works.map((work) => {
-      let detectedLang: string | undefined = undefined;
-      if (!targetLangParam && normQuery && normQuery.length >= 3) {
-        const transMatch = work.translations.find((t) =>
-          t.title && t.title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().includes(normQuery)
-        );
-        if (transMatch?.language) {
-          detectedLang = transMatch.language === "spa" ? "es" : transMatch.language;
-        } else {
-          const titleMatch = work.titles.find((t) =>
-            t.title && t.title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().includes(normQuery)
-          );
-          if (titleMatch?.language) {
-            detectedLang = titleMatch.language === "es" ? "es" : titleMatch.language;
-          } else {
-            const edMatch = work.editions.find((e) =>
-              e.title && e.language && e.title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().includes(normQuery)
-            );
-            if (edMatch?.language) {
-              detectedLang = edMatch.language === "spa" ? "es" : edMatch.language;
-            }
-          }
-        }
-      }
-
-      const targetLang = targetLangParam || detectedLang?.toLowerCase();
-      const primaryAuthor = work.contributors[0]?.author?.name || "Unknown Author";
-      const defaultEdition =
-        (targetLang ? work.editions.find((e) => e.language === targetLang || e.language === (targetLang === "es" ? "spa" : targetLang)) : undefined) ||
-        work.editions.find((e) => e.isDefault) ||
-        work.editions[0];
-      const bestCoverObj = selectBestCover(defaultEdition?.covers) || selectBestCover(work.editions.flatMap((e: any) => e.covers));
-      const coverUrl = bestCoverObj?.url || "";
-
-      const translation = targetLang
-        ? work.translations.find((t) => t.language === targetLang || t.language === (targetLang === "es" ? "spa" : targetLang))
-        : undefined;
-
-      const titleObj = targetLang
-        ? work.titles.find(
-            (t) =>
-              t.language === targetLang ||
-              t.language === (targetLang === "es" ? "spa" : targetLang)
-          )
-        : undefined;
-
-      const rawTitle =
-        translation?.title ||
-        defaultEdition?.title ||
-        titleObj?.title ||
-        work.canonicalTitle;
-
-      const displayTitle =
-        rawTitle.replace(/\s*\([^)]*#\d+[^)]*\)/gi, "").trim() || rawTitle;
-
-      let targetEditions = work.editions;
-      if (targetLang) {
-        const matchingEditions = work.editions.filter(
-          (ed) =>
-            ed.language === targetLang ||
-            ed.language === (targetLang === "es" ? "spa" : targetLang)
-        );
-        if (matchingEditions.length > 0) {
-          targetEditions = matchingEditions;
-        }
-      }
-
-      const editionsList = targetEditions.map((ed) => ({
-        isbn: ed.isbn13,
-        isbn10: ed.isbn10,
-        language: ed.language,
-        format: ed.format,
-        publicationDate: ed.publicationDate,
-        cover: selectBestCover(ed.covers)?.url || undefined,
-      }));
-
+      const searchBook = canonicalWorkToSearchBook(work, language, undefined, query);
       return {
-        id: work.id,
-        provider: "goodreads",
-        title: displayTitle,
-        workTitle: work.canonicalTitle,
-        author: primaryAuthor,
-        cover: coverUrl,
-        rating: work.averageRating ?? undefined,
-        publicationDate:
-          defaultEdition?.publicationDate ||
-          (work.publicationYear ? String(work.publicationYear) : undefined),
-        genres: work.genres.map((g) => g.genre.name),
-        isbn: defaultEdition?.isbn13 || defaultEdition?.isbn10 || null,
-        isbn10: defaultEdition?.isbn10 || null,
-        language: defaultEdition?.language || work.originalLanguage || null,
-        presentation: isIsbn ? "isbn" : "work",
-        editions: editionsList,
+        ...searchBook,
+        provider: "goodreads" as const,
       };
     });
   },

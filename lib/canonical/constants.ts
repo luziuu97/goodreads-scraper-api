@@ -398,3 +398,15 @@ export function selectBestCover<T extends { url?: string | null; provider?: stri
 
   return sorted[0];
 }
+
+export function roundRating(rating?: number | null): number | null {
+  if (typeof rating !== "number" || isNaN(rating) || rating <= 0) return null;
+  return Math.round(rating * 100) / 100;
+}
+
+export function normalizeLanguage(lang?: string | null): string | null {
+  if (!lang || !lang.trim()) return null;
+  const clean = lang.trim().toLowerCase();
+  if (clean === "und" || clean === "undetermined" || clean === "unknown") return null;
+  return lang.trim();
+}

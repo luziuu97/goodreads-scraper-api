@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { formatAudioLength, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover } from "@/lib/canonical/constants";
+import { formatAudioLength, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover, normalizeLanguage, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
 import type {
   BookSearchInput,
   NormalizedBookDetailsResponse,
@@ -86,12 +86,19 @@ function preferredEdition(work: any, language?: string, isbn?: string | null, qu
     const normQuery = cleanTitleForMatch(query);
 
     if (normQuery.length >= 3) {
-      const queryMatch = work.editions.find((edition: any) => {
+      const matches = work.editions.filter((edition: any) => {
         if (!edition.title) return false;
         const normTitle = cleanTitleForMatch(edition.title);
         return normTitle.length >= 3 && (normTitle.includes(normQuery) || (normQuery.length >= 5 && normQuery.includes(normTitle)));
       });
-      if (queryMatch) return queryMatch;
+      if (matches.length > 0) {
+        const targetLang = work.originalLanguage || "en";
+        const bestMatch =
+          matches.find((e: any) => e.language === targetLang || e.language === "en") ||
+          matches.find((e: any) => e.isDefault) ||
+          matches[0];
+        return bestMatch;
+      }
     }
   }
 
@@ -111,9 +118,28 @@ function detectQueryLanguageMatch(work: any, query?: string): string | undefined
   const normQuery = cleanTitleForMatch(query);
   if (!normQuery || normQuery.length < 3) return undefined;
 
+  // Check if query matches the canonical title or an original language / English edition first
+  const normCanonical = cleanTitleForMatch(work.canonicalTitle || "");
+  if (normCanonical.length >= 3 && (normCanonical.includes(normQuery) || normQuery.includes(normCanonical))) {
+    return undefined;
+  }
+
+  const origLang = work.originalLanguage || "en";
+  const origEdMatch = (work.editions || []).some((ed: any) => {
+    if ((ed.language === origLang || ed.language === "en") && ed.title) {
+      const normTitle = cleanTitleForMatch(ed.title);
+      return normTitle.length >= 3 && (normTitle.includes(normQuery) || normQuery.includes(normTitle));
+    }
+    return false;
+  });
+
+  if (origEdMatch) {
+    return undefined;
+  }
+
   // 1. Check translations
   for (const trans of work.translations || []) {
-    if (trans.title) {
+    if (trans.title && trans.language !== origLang && trans.language !== "en") {
       const normTitle = cleanTitleForMatch(trans.title);
       if (normTitle.length >= 3 && (normTitle.includes(normQuery) || (normQuery.length >= 5 && normQuery.includes(normTitle)))) {
         return trans.language;
@@ -123,7 +149,7 @@ function detectQueryLanguageMatch(work: any, query?: string): string | undefined
 
   // 2. Check work titles
   for (const titleObj of work.titles || []) {
-    if (titleObj.title) {
+    if (titleObj.title && titleObj.language !== origLang && titleObj.language !== "en") {
       const normTitle = cleanTitleForMatch(titleObj.title);
       if (normTitle.length >= 3 && (normTitle.includes(normQuery) || (normQuery.length >= 5 && normQuery.includes(normTitle)))) {
         return titleObj.language;
@@ -133,7 +159,7 @@ function detectQueryLanguageMatch(work: any, query?: string): string | undefined
 
   // 3. Check edition titles
   for (const ed of work.editions || []) {
-    if (ed.title && ed.language) {
+    if (ed.title && ed.language && ed.language !== origLang && ed.language !== "en") {
       const normTitle = cleanTitleForMatch(ed.title);
       if (normTitle.length >= 3 && (normTitle.includes(normQuery) || (normQuery.length >= 5 && normQuery.includes(normTitle)))) {
         return ed.language;
@@ -142,6 +168,33 @@ function detectQueryLanguageMatch(work: any, query?: string): string | undefined
   }
 
   return undefined;
+}
+
+function buildAllCoverCandidates(work: any): Array<{ url: string; provider?: string }> {
+  const candidates: Array<{ url: string; provider?: string }> = [];
+
+  for (const ed of work.editions || []) {
+    for (const c of ed.covers || []) {
+      if (c && c.url && c.url.trim()) {
+        candidates.push({ url: c.url.trim(), provider: c.provider || undefined });
+      }
+    }
+  }
+
+  for (const ed of work.editions || []) {
+    const isbn = ed.isbn13 || ed.isbn10;
+    if (isbn) {
+      const clean = isbn.replace(/[^0-9Xx]/g, "").toUpperCase();
+      if (clean.length === 10 || clean.length === 13) {
+        candidates.push({
+          url: `https://covers.openlibrary.org/b/isbn/${clean}-L.jpg`,
+          provider: "openlibrary",
+        });
+      }
+    }
+  }
+
+  return candidates;
 }
 
 export function canonicalWorkToSearchBook(
@@ -154,7 +207,8 @@ export function canonicalWorkToSearchBook(
   const effectiveLang = language || (detectedLang ? toIso639_1(detectedLang) || undefined : undefined);
 
   const edition = preferredEdition(work, effectiveLang, isbn || undefined, query);
-  const coverObj = selectBestCover(edition?.covers) || selectBestCover(work.editions?.flatMap((e: any) => e.covers || []));
+  const allCovers = buildAllCoverCandidates(work);
+  const coverObj = selectBestCover(allCovers) || selectBestCover(edition?.covers);
   const translation = effectiveLang
     ? work.translations.find((item: any) => toIso639_1(item.language) === effectiveLang || item.language === effectiveLang)
     : undefined;
@@ -178,11 +232,20 @@ export function canonicalWorkToSearchBook(
     .filter((ed: any) => ed.isbn13 || ed.isbn10)
     .slice(0, 5)
     .map((ed: any) => {
-      const edCoverObj = selectBestCover(ed.covers);
+      const edIsbn = ed.isbn13 || ed.isbn10;
+      const edOlCandidate = edIsbn
+        ? `https://covers.openlibrary.org/b/isbn/${edIsbn.replace(/[^0-9Xx]/g, "").toUpperCase()}-L.jpg`
+        : undefined;
+      const edCoverCandidates = [
+        ...(ed.covers || []),
+        ...(edOlCandidate ? [{ url: edOlCandidate, provider: "openlibrary" }] : []),
+      ];
+      const edCoverObj = selectBestCover(edCoverCandidates);
+      const edLang = normalizeLanguage(ed.language);
       return {
         isbn: ed.isbn13 ?? null,
         isbn10: ed.isbn10 ?? null,
-        language: ed.language ?? null,
+        language: edLang,
         format: ed.format?.toLowerCase() ?? null,
         publicationDate: ed.publicationDate ?? null,
         cover: edCoverObj?.url || undefined,
@@ -201,6 +264,8 @@ export function canonicalWorkToSearchBook(
   }
   const displayTitle = rawTitle.replace(/\s*\([^)]*#\d+[^)]*\)/gi, "").trim() || rawTitle;
 
+  const resolvedLang = normalizeLanguage(edition?.language || effectiveLang || work.originalLanguage);
+
   return {
     id: providerReferenceForWork.id,
     provider: providerReferenceForWork.provider,
@@ -208,7 +273,7 @@ export function canonicalWorkToSearchBook(
     workTitle: work.canonicalTitle,
     author: author?.name || "Unknown Author",
     cover: coverObj?.url || "",
-    rating: work.averageRating ?? undefined,
+    rating: roundRating(work.averageRating) ?? undefined,
     publicationDate:
       edition?.publicationDate || (work.publicationYear ? String(work.publicationYear) : undefined),
     genres: normalizeAndRankCategories(
@@ -217,8 +282,8 @@ export function canonicalWorkToSearchBook(
     ),
     isbn: edition?.isbn13 || edition?.isbn10 || null,
     isbn10: edition?.isbn10 || null,
-    language: edition?.language || effectiveLang || work.originalLanguage || null,
-    languageCode: edition?.language || effectiveLang || work.originalLanguage || null,
+    language: resolvedLang,
+    languageCode: resolvedLang,
     presentation: isbn ? "isbn" : edition ? "edition" : "work",
     editions: editionSummaries.length > 0 ? editionSummaries : undefined,
     edition: edition
@@ -232,8 +297,8 @@ export function canonicalWorkToSearchBook(
           publicationDate: edition.publicationDate,
           pages: edition.pages,
           publisher: edition.publisher,
-          language: edition.language,
-          languageCode: edition.language,
+          language: normalizeLanguage(edition.language),
+          languageCode: normalizeLanguage(edition.language),
           country: null,
           countryCode: null,
           cover: coverObj?.url || "",
@@ -359,13 +424,31 @@ export function canonicalWorkToDetails(
     ? {
         ...edition,
         format: normalizeBookFormat(edition.format),
+        cover: pickBestCoverUrl([
+          edition.cover,
+          ...(edition.covers?.map((c: any) => c.url) || []),
+          edition.isbn13 ? `https://covers.openlibrary.org/b/isbn/${edition.isbn13.replace(/[^0-9Xx]/g, "").toUpperCase()}-L.jpg` : undefined,
+          edition.isbn10 ? `https://covers.openlibrary.org/b/isbn/${edition.isbn10.replace(/[^0-9Xx]/g, "").toUpperCase()}-L.jpg` : undefined,
+        ]) || edition.cover,
       }
     : null;
 
-  const normalizedEditions = (work.editions || []).map((ed: any) => ({
-    ...ed,
-    format: normalizeBookFormat(ed.format),
-  }));
+  const normalizedEditions = (work.editions || []).map((ed: any) => {
+    const edIsbn = ed.isbn13 || ed.isbn10;
+    const olCover = edIsbn
+      ? `https://covers.openlibrary.org/b/isbn/${edIsbn.replace(/[^0-9Xx]/g, "").toUpperCase()}-L.jpg`
+      : undefined;
+    const bestCover = pickBestCoverUrl([
+      ed.cover,
+      ...(ed.covers?.map((c: any) => c.url) || []),
+      olCover,
+    ]);
+    return {
+      ...ed,
+      format: normalizeBookFormat(ed.format),
+      cover: bestCover || ed.cover,
+    };
+  });
 
   function dedupeContributors(contributors: any[]) {
     const seen = new Set<string>();
@@ -405,8 +488,8 @@ export function canonicalWorkToDetails(
       title: displayTitle,
       canonicalTitle: work.canonicalTitle,
       description,
-      language: effectiveLang || null,
-      languageCode: effectiveLang || null,
+      language: normalizeLanguage(effectiveLang),
+      languageCode: normalizeLanguage(effectiveLang),
       author: authorsList[0]?.name || author?.name || "Unknown Author",
       authors: authorsList.length > 0 ? authorsList : [{ id: author?.id || "0", name: author?.name || "Unknown Author", role: "AUTHOR" }],
       translators: translatorsList,
@@ -415,7 +498,7 @@ export function canonicalWorkToDetails(
       editors: editorsList,
       audioLength: audioInfo.audioLength,
       audioLengthMinutes: edition?.audioLengthMinutes || null,
-      rating: work.averageRating,
+      rating: roundRating(work.averageRating),
       ratingsCount: work.ratingsCount,
       publicationYear: work.publicationYear,
       publicationDate: edition?.publicationDate || (work.publicationYear ? String(work.publicationYear) : null),

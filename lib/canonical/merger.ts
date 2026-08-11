@@ -573,8 +573,8 @@ export async function upsertCanonicalWorkFromProvider(
           const px = c.pixelCount || (c.width && c.height ? c.width * c.height : 0);
           const ratio = c.width && c.height ? c.width / c.height : 0;
           const isBookRatio = ratio >= 0.5 && ratio <= 0.85;
-          const providerBonus = c.provider === "isbndb" ? 1000 : c.provider === "hardcover" ? 500 : 100;
-          const score = px + (isBookRatio ? 2000 : 0) + providerBonus;
+          const providerRankBonus = getCoverPriorityRank(c.provider) === 1 ? 5000000 : getCoverPriorityRank(c.provider) === 2 ? 1000000 : 0;
+          const score = providerRankBonus + px + (isBookRatio ? 2000 : 0);
 
           if (score > bestScore) {
             bestScore = score;
