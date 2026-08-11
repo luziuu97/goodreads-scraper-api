@@ -34,6 +34,40 @@ export const SUPPORTED_LANGUAGES = [
 
 export type LanguageCode = (typeof SUPPORTED_LANGUAGES)[number] | string;
 
+/** One normalization contract for persisted title keys and user queries. */
+export function normalizeSearchText(raw?: string | null): string {
+  if (!raw) return "";
+  return raw
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Normalize and checksum-validate an ISBN-10 or ISBN-13. */
+export function normalizeValidIsbn(raw?: string | null): string | null {
+  if (!raw) return null;
+  const isbn = raw.replace(/[^0-9Xx]/g, "").toUpperCase();
+  if (/^\d{9}[\dX]$/.test(isbn)) {
+    const sum = [...isbn].reduce(
+      (total, char, index) => total + (char === "X" ? 10 : Number(char)) * (10 - index),
+      0
+    );
+    return sum % 11 === 0 ? isbn : null;
+  }
+  if (/^\d{13}$/.test(isbn)) {
+    const sum = [...isbn.slice(0, 12)].reduce(
+      (total, char, index) => total + Number(char) * (index % 2 === 0 ? 1 : 3),
+      0
+    );
+    return (10 - (sum % 10)) % 10 === Number(isbn[12]) ? isbn : null;
+  }
+  return null;
+}
+
 export function normalizeBookFormat(rawFormat?: string | null): BookFormat {
   if (!rawFormat) return "OTHER";
   const norm = rawFormat.toLowerCase().trim();

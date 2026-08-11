@@ -18,6 +18,7 @@ export async function phase07IntegrityChecks(
   logger.info('Starting Phase 07: Integrity Checks');
   const pool = getPool();
   const results: IntegrityCheckResult[] = [];
+  let criticalFailures = 0;
 
   const runCheck = async (
     name: string,
@@ -39,10 +40,12 @@ export async function phase07IntegrityChecks(
         if (critical === false) {
           logger.warn(`Check warning: ${name} - ${detail}`);
         } else {
+          criticalFailures++;
           logger.error(`Check failed: ${name} - ${detail}`);
         }
       }
     } catch (err) {
+      criticalFailures++;
       logger.error(`Error running check ${name}: ${err instanceof Error ? err.message : String(err)}`);
       results.push({ name, passed: false, detail: `Query error: ${err instanceof Error ? err.message : String(err)}` });
     }
@@ -55,7 +58,10 @@ export async function phase07IntegrityChecks(
     'works_count',
     isDry
       ? `SELECT COUNT(*) FROM _import_works`
-      : `SELECT COUNT(*) FROM "Work" w JOIN "WorkExternalId" we ON we."workId" = w.id WHERE we.provider = 'goodreads-dataset'`,
+      : `SELECT COUNT(*)
+         FROM _import_works iw
+         JOIN "WorkExternalId" we
+           ON we."externalId" = iw.work_id::text AND we.provider = 'goodreads-dataset'`,
     (val) => ({
       passed: val <= config.worksLimit,
       detail: `Found ${val} works (limit ${config.worksLimit})`
@@ -67,7 +73,13 @@ export async function phase07IntegrityChecks(
     'editions_per_work',
     isDry
       ? `SELECT COALESCE(MAX(cnt), 0) FROM (SELECT COUNT(*) cnt FROM _import_editions GROUP BY work_id) sub`
-      : `SELECT COALESCE(MAX(cnt), 0) FROM (SELECT COUNT(*) cnt FROM "Edition" e JOIN "WorkExternalId" we ON we."workId" = e."workId" WHERE we.provider = 'goodreads-dataset' GROUP BY we."workId") sub`,
+      : `SELECT COALESCE(MAX(cnt), 0) FROM (
+           SELECT COUNT(*) cnt
+           FROM _import_editions ie
+           JOIN "EditionExternalId" ee
+             ON ee."externalId" = ie.book_id::text AND ee.provider = 'goodreads-dataset'
+           GROUP BY ie.work_id
+         ) sub`,
     (val) => ({
       passed: val <= config.editionsPerWork,
       detail: `Max editions per work is ${val} (limit ${config.editionsPerWork})`
@@ -80,9 +92,10 @@ export async function phase07IntegrityChecks(
     isDry
       ? `SELECT COUNT(*) FROM (SELECT work_id FROM _import_works GROUP BY work_id HAVING COUNT(work_id) != 1) sub`
       : `SELECT COUNT(*) FROM (
-           SELECT w.id FROM "Work" w 
-           JOIN "WorkExternalId" we ON we."workId" = w.id AND we.provider = 'goodreads-dataset'
-           GROUP BY w.id HAVING COUNT(we.id) != 1
+           SELECT iw.work_id FROM _import_works iw
+           LEFT JOIN "WorkExternalId" we
+             ON we."externalId" = iw.work_id::text AND we.provider = 'goodreads-dataset'
+           GROUP BY iw.work_id HAVING COUNT(we.id) != 1
          ) sub`,
     (val) => ({
       passed: val === 0,
@@ -96,9 +109,10 @@ export async function phase07IntegrityChecks(
     isDry
       ? `SELECT COUNT(*) FROM (SELECT book_id FROM _import_editions GROUP BY book_id HAVING COUNT(book_id) != 1) sub`
       : `SELECT COUNT(*) FROM (
-           SELECT e.id FROM "Edition" e
-           JOIN "EditionExternalId" ee ON ee."editionId" = e.id AND ee.provider = 'goodreads-dataset'
-           GROUP BY e.id HAVING COUNT(ee.id) != 1
+           SELECT ie.book_id FROM _import_editions ie
+           LEFT JOIN "EditionExternalId" ee
+             ON ee."externalId" = ie.book_id::text AND ee.provider = 'goodreads-dataset'
+           GROUP BY ie.book_id HAVING COUNT(ee.id) != 1
          ) sub`,
     (val) => ({
       passed: val === 0,
@@ -179,9 +193,58 @@ export async function phase07IntegrityChecks(
     })
   );
 
+  // 11. imported edition statistics survived finalization
+  await runCheck(
+    'edition_statistics_match_staging',
+    isDry
+      ? `SELECT 0`
+      : `SELECT COUNT(*)
+         FROM _import_editions ie
+         JOIN "EditionExternalId" ee
+           ON ee."externalId" = ie.book_id::text AND ee.provider = 'goodreads-dataset'
+         JOIN "Edition" e ON e.id = ee."editionId"
+         WHERE COALESCE(e."ratingsCount", 0) != COALESCE(ie.ratings_count, 0)
+            OR COALESCE(e."textReviewsCount", 0) != COALESCE(ie.text_reviews_count, 0)`,
+    (val) => ({
+      passed: val === 0,
+      detail: `${val} editions have statistics that differ from staging`
+    })
+  );
+
+  // 12. every imported work with contributors has one primary author
+  await runCheck(
+    'primary_contributors',
+    isDry
+      ? `SELECT COUNT(*) FROM (
+           SELECT ie.work_id
+           FROM _import_editions ie
+           JOIN _import_edition_authors iea ON iea.book_id = ie.book_id
+           WHERE iea.role = '' OR iea.role IS NULL OR iea.role = 'Author'
+           GROUP BY ie.work_id
+           HAVING COUNT(*) FILTER (WHERE iea.position = 0) = 0
+         ) sub`
+      : `SELECT COUNT(*) FROM (
+           SELECT wc."workId"
+           FROM "WorkContributor" wc
+           JOIN "WorkExternalId" we ON we."workId" = wc."workId" AND we.provider = 'goodreads-dataset'
+           JOIN _import_works iw ON iw.work_id::text = we."externalId"
+           WHERE wc.role = 'AUTHOR'
+           GROUP BY wc."workId"
+           HAVING COUNT(*) FILTER (WHERE wc."isPrimary") != 1
+         ) sub`,
+    (val) => ({
+      passed: val === 0,
+      detail: `${val} works with authors do not have exactly one primary author`
+    })
+  );
+
   report.integrity = report.integrity || {};
   for (const r of results) {
     report.integrity[r.name] = { passed: r.passed, detail: r.detail };
+  }
+
+  if (criticalFailures > 0) {
+    throw new Error(`Integrity checks failed: ${criticalFailures} critical check(s)`);
   }
 
   logger.info('Phase 07 integrity checks completed.');

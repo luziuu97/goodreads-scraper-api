@@ -1,10 +1,11 @@
 import { prisma } from "@/lib/db";
 import { getCachedResponse, setCachedResponse } from "@/lib/redis-cache";
+import { normalizeValidIsbn } from "@/lib/canonical/constants";
 
 const LOOKUP_TTL = 30 * 24 * 60 * 60; // 30 days
 
 export function normalizeIsbn(isbn: string): string {
-  return isbn.replace(/[^0-9X]/gi, "").trim();
+  return normalizeValidIsbn(isbn) || "";
 }
 
 /**
@@ -23,7 +24,7 @@ export async function resolveCanonicalByIsbn(
   }
 
   // Query Prisma DB
-  const edition = await prisma.edition.findFirst({
+  const editions = await prisma.edition.findMany({
     where: {
       OR: [
         { isbn13: cleanIsbn },
@@ -35,8 +36,16 @@ export async function resolveCanonicalByIsbn(
       id: true,
       workId: true,
     },
+    take: 2,
   });
 
+  const workIds = new Set(editions.map((edition) => edition.workId));
+  if (workIds.size > 1) {
+    console.error("Ambiguous canonical ISBN lookup", { isbn: cleanIsbn, workIds: [...workIds] });
+    return null;
+  }
+
+  const edition = editions[0];
   if (edition) {
     const result = { workId: edition.workId, editionId: edition.id };
     await setCachedResponse(redisKey, result, LOOKUP_TTL);

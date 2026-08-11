@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "Edition" ADD COLUMN "audioLengthMinutes" INTEGER;
+ALTER TABLE "Edition" ADD COLUMN IF NOT EXISTS "audioLengthMinutes" INTEGER;

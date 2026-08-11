@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { streamJsonl } from '../lib/stream';
-import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, markPhaseSkipped, copyFromArray } from '../lib/staging-db';
+import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, copyFromArray } from '../lib/staging-db';
 import { safeInt } from '../lib/normalize';
 import type { ProgressLogger } from '../lib/progress';
 import { type ImportReport, trackMemory } from '../lib/report';
@@ -20,7 +20,6 @@ export async function phase05ImportGenres(
   
   if (config.resume && status === 'done') {
     logger.info(`Skipping ${phaseName}`);
-    await markPhaseSkipped(phaseName);
     return;
   }
   
@@ -59,7 +58,7 @@ export async function phase05ImportGenres(
         }
       }
     }
-  }, { batchSize: 10000 });
+  }, { progressEvery: 100000 });
   
   const genresToInsert: any[] = [];
   
@@ -74,10 +73,8 @@ export async function phase05ImportGenres(
     }
   }
   
-  if (!config.dryRun) {
-    logger.info(`Inserting ${genresToInsert.length} work genres`);
-    await copyFromArray(pool, '_import_work_genres', ['work_id', 'genre_name', 'score'], genresToInsert.map(g => [g.work_id, g.genre_name, g.score]));
-  }
+  logger.info(`Inserting ${genresToInsert.length} work genres`);
+  await copyFromArray(pool, '_import_work_genres', ['work_id', 'genre_name', 'score'], genresToInsert.map(g => [g.work_id, g.genre_name, g.score]));
   
   report.counts = report.counts || {};
   report.counts.genresImported = genresToInsert.length;

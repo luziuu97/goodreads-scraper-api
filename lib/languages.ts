@@ -100,6 +100,12 @@ export function getLanguageName(input?: string | null): string | null {
   return matched ? matched.name : null;
 }
 
+/** Validate API input and return the canonical ISO-639-1 code. */
+export function parseLanguageParam(input?: string | null): string | null {
+  if (!input?.trim()) return null;
+  return LANGUAGE_LOOKUP.get(input.trim().toLowerCase().split(/[-_]/)[0])?.iso639_1 || null;
+}
+
 /**
  * Formats the entire accepted language definitions list as CSV content.
  */

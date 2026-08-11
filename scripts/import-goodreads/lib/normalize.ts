@@ -1,16 +1,35 @@
 // Re-export from canonical
 export { normalizeBookFormat, normalizeLanguageCode } from '../../../lib/canonical/constants';
+import { normalizeSearchText } from '../../../lib/canonical/constants';
 
 /**
  * Normalize an ISBN string. Returns null if invalid.
  */
-export function normalizeIsbn(raw: string | null | undefined): string | null {
+export function normalizeIsbn(raw: string | null | undefined, expectedLength?: 10 | 13): string | null {
   if (!raw) return null;
   const stripped = raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const isbn = stripped.replace(/[^0-9X]/g, '');
-  if (isbn.length === 10 || isbn.length === 13) {
-    return isbn;
+  if (expectedLength && isbn.length !== expectedLength) return null;
+
+  if (isbn.length === 10) {
+    if (!/^\d{9}[\dX]$/.test(isbn)) return null;
+    const sum = isbn.split('').reduce((total, char, index) => {
+      const value = char === 'X' ? 10 : Number(char);
+      return total + value * (10 - index);
+    }, 0);
+    return sum % 11 === 0 ? isbn : null;
   }
+
+  if (isbn.length === 13) {
+    if (!/^\d{13}$/.test(isbn)) return null;
+    const sum = isbn.slice(0, 12).split('').reduce(
+      (total, char, index) => total + Number(char) * (index % 2 === 0 ? 1 : 3),
+      0
+    );
+    const checkDigit = (10 - (sum % 10)) % 10;
+    return checkDigit === Number(isbn[12]) ? isbn : null;
+  }
+
   return null;
 }
 
@@ -73,13 +92,7 @@ export function normalizeTitle(raw: string | null | undefined): string {
  * Produce a lowercase, diacritics-stripped, whitespace-collapsed title key for dedup
  */
 export function normalizedTitleKey(raw: string | null | undefined): string {
-  if (!raw) return '';
-  return raw
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ');
+  return normalizeSearchText(raw);
 }
 
 /**

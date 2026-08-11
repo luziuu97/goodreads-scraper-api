@@ -53,7 +53,7 @@ npm run import:goodreads -- [options]
 - `--editions-per-work <number>`: Maximum number of editions to import per work (e.g., 12).
 - `--output <path>`: Path where the final `pg_dump` file should be saved (e.g., `/path/to/dump.dump`).
 - `--resume`: Resume an interrupted import using existing staging tables.
-- `--dry-run`: Run the work and edition selection phases without writing to the final tables.
+- `--dry-run`: Run every staging and validation phase without writing to canonical tables or creating a dump.
 - `--drop-staging`: Drop all staging tables before starting (useful to force a fresh run).
 
 **Examples:**
@@ -74,15 +74,15 @@ npm run import:goodreads -- --source /data/goodreads --works 50000 --editions-pe
 
 ## 6. Execution Phases
 
-The import process is divided into 8 distinct, memory-efficient phases:
-1. **Phase 1: Setup & Validation** - Checks database connectivity, verifies that all necessary dataset files exist, and ensures `pg_dump` is available.
-2. **Phase 2: Staging Tables Creation** - Creates temporary `_staging_*` tables to hold parsed JSON data securely before final insertion.
-3. **Phase 3: Work Selection** - Scans `goodreads_book_works.json` to calculate popularity scores for all works, sorting and selecting the top N works requested.
-4. **Phase 4: Edition Selection** - Scans the massive `goodreads_books.json` file. It evaluates every edition against the selected top works, ranking them and keeping only the best M editions per work.
-5. **Phase 5: Metadata Extraction** - Scans authors, series, and genres JSON files, extracting only the metadata relevant to the selected works and editions.
-6. **Phase 6: Data Transformation** - Maps and normalizes the raw staged data to the final Prisma schema format, handling type conversions and relation linkages.
-7. **Phase 7: Database Insertion** - Inserts the transformed data into the main Prisma tables in bulk, utilizing idempotent `ON CONFLICT DO NOTHING` operations.
-8. **Phase 8: Cleanup & Dump** - Optionally creates a standard `pg_dump` archive of the populated database and drops the temporary staging tables.
+After staging setup, the import process runs eight resumable phases:
+1. **Work selection** - Scans `goodreads_book_works.json`, ranks works, and stages the top N.
+2. **Edition selection** - Scans `goodreads_books.json`, maintains bounded candidate pools, and stages up to M diverse editions per work.
+3. **Authors** - Extracts metadata for referenced authors.
+4. **Series** - Extracts metadata for referenced series.
+5. **Genres** - Aggregates the strongest genre associations for selected works.
+6. **Finalize** - Normalizes and transactionally writes canonical tables and relationships.
+7. **Integrity checks** - Reconciles staging and canonical data and fails on critical discrepancies.
+8. **Dump** - Optionally creates a `pg_dump` archive, excluding `_import_*` staging tables.
 
 ## 7. Popularity Formula and Work Selection
 
@@ -123,16 +123,16 @@ The following table summarizes how key fields from the Goodreads dataset map to 
 
 | Goodreads Field | Prisma Field | Notes |
 |-----------------|--------------|-------|
-| `work_id` | `Work.goodreadsId` | Unique identifier for a Work |
-| `book_id` | `Edition.goodreadsId` | Unique identifier for an Edition |
-| `original_title` | `Work.title` | Fallback to `best_book_id` title if empty |
-| `original_publication_year` | `Work.firstPublishYear` | Extracted and parsed as Integer |
+| `work_id` | `WorkExternalId.externalId` | Stored with provider `goodreads-dataset` |
+| `book_id` | `EditionExternalId.externalId` | Stored with provider `goodreads-dataset` |
+| `original_title` | `Work.canonicalTitle` | Falls back to `Unknown Title` if empty |
+| `original_publication_year` | `Work.publicationYear` | Extracted and parsed as Integer |
 | `isbn13` / `isbn` | `Edition.isbn13` / `Edition.isbn10` | Validated and cleaned |
-| `image_url` | `Edition.coverUrl` | Ignored if it matches Goodreads placeholders |
-| `num_pages` | `Edition.pageCount` | Parsed as Integer |
+| `image_url` | `EditionCover.url` | Ignored if it matches Goodreads placeholders |
+| `num_pages` | `Edition.pages` | Parsed as Integer |
 | `language_code` | `Edition.language` | Normalized to standard locales |
-| `description` | `Edition.description` | HTML tags stripped or sanitized |
-| `author_id` | `Author.goodreadsId` | Linked via `_WorkAuthors` and `_EditionAuthors` |
+| `description` | `WorkTranslation.description` | Stored for a selected localized edition |
+| `author_id` | `AuthorExternalId.externalId` | Linked through contributor tables |
 
 ## 11. Expected Storage Requirements
 
@@ -146,8 +146,9 @@ Based on typical runs, here are the expected disk and storage requirements:
 
 The importer is built to be resilient. If the script crashes (e.g., OOM error, manual cancellation), you can restart it using the `--resume` flag.
 - The importer detects which staging tables are already populated.
-- **Phase Skipping**: If Phase 3 (Work Selection) was completed, it will skip rescanning the works file and move directly to Phase 4.
-- If you wish to start entirely from scratch, omit `--resume` and include the `--drop-staging` flag to clear the interrupted state.
+- **Phase Skipping**: With `--resume`, phases whose state is `done` remain completed and are skipped.
+- Without `--resume`, staging rows and phase state are cleared automatically before a fresh run. `--drop-staging` additionally recreates the staging schema.
+- `--dry-run` still writes to staging so every selection and integrity phase can execute, but it does not modify canonical tables or create a dump.
 
 ## 13. Creating and Restoring the Dump
 
@@ -166,7 +167,7 @@ pg_restore -Fc --no-owner -d your_local_db_name /path/to/dump.dump
 
 ## 14. Idempotency
 
-Running the import directly against an existing database is completely safe. All database insertion operations (Phase 7) use PostgreSQL's `ON CONFLICT DO NOTHING` (or Prisma equivalent `upsert`/`createMany` with `skipDuplicates`). It will not create duplicate authors, works, or editions if they already exist.
+Finalization is transactional: either all canonical entities, external IDs, and relationships are committed, or the phase is rolled back. Existing Goodreads entities are reused through their external IDs, mutable edition statistics are refreshed, and explicit conflict handling prevents duplicate relationships. Integrity-check failures make the command fail instead of producing a silently invalid dump.
 
 ## 15. Duplicate Work Candidates
 

@@ -1,12 +1,24 @@
 import path from 'node:path';
 import { streamJsonl } from '../lib/stream';
-import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, markPhaseSkipped, copyFromArray } from '../lib/staging-db';
+import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, copyFromArray } from '../lib/staging-db';
 import { safeInt } from '../lib/normalize';
 import { rankEditionsForWork } from '../lib/edition-ranker';
 import type { RawEdition } from '../lib/edition-ranker';
 import type { ProgressLogger } from '../lib/progress';
 import { type ImportReport, trackMemory } from '../lib/report';
 import type { ImportConfig } from '../types';
+
+export function mapEditionAuthors(
+  bookId: string,
+  authors: Array<{ author_id: string; role: string }>
+): Array<{ book_id: number; author_id: number; role: string; position: number }> {
+  return authors.map((author, position) => ({
+    book_id: safeInt(bookId),
+    author_id: safeInt(author.author_id),
+    role: author.role || '',
+    position,
+  }));
+}
 
 /**
  * Phase 2: Filter and rank editions for the selected works.
@@ -22,7 +34,6 @@ export async function phase02FilterEditions(
   
   if (config.resume && status === 'done') {
     logger.info(`Skipping ${phaseName} (already done)`);
-    await markPhaseSkipped(phaseName);
     return;
   }
   
@@ -39,6 +50,7 @@ export async function phase02FilterEditions(
   
   const editionsPath = path.join(config.sourceDir, 'goodreads_books.json');
   const workEditions = new Map<string, RawEdition[]>();
+  const candidatePoolSize = Math.max(config.editionsPerWork * 4, 32);
   
   let lineCount = 0;
   let editionsScanned = 0;
@@ -52,11 +64,15 @@ export async function phase02FilterEditions(
     
     if (record.work_id && selectedWorkIds.has(record.work_id.toString())) {
       editionsScanned++;
-      const arr = workEditions.get(record.work_id.toString()) || [];
+      const workId = record.work_id.toString();
+      let arr = workEditions.get(workId) || [];
       arr.push(record as RawEdition);
-      workEditions.set(record.work_id.toString(), arr);
+      if (arr.length > candidatePoolSize * 2) {
+        arr = rankEditionsForWork(arr, bestBookMap.get(workId) || '', candidatePoolSize);
+      }
+      workEditions.set(workId, arr);
     }
-  }, { batchSize: 10000 });
+  }, { progressEvery: 100000 });
   
   report.counts = report.counts || {};
   report.counts.editionsScanned = editionsScanned;
@@ -64,7 +80,6 @@ export async function phase02FilterEditions(
   const selectedEditions: any[] = [];
   const editionAuthors: any[] = [];
   const workSeries: any[] = [];
-  let rejectedCount = 0;
   
   for (const [workId, editions] of workEditions.entries()) {
     const bestBookId = bestBookMap.get(workId);
@@ -88,15 +103,7 @@ export async function phase02FilterEditions(
       });
       
       if (Array.isArray(r.authors)) {
-        for (let i = 0; i < r.authors.length; i++) {
-          const author = r.authors[i];
-          editionAuthors.push({
-            book_id: safeInt(r.book_id),
-            author_id: safeInt(author.author_id),
-            role: author.role || '',
-            position: i + 1
-          });
-        }
+        editionAuthors.push(...mapEditionAuthors(r.book_id, r.authors));
       }
       
       if (Array.isArray(r.series)) {
@@ -108,12 +115,12 @@ export async function phase02FilterEditions(
         }
       }
     }
-    rejectedCount += editions.length - ranked.length;
   }
+
+  const rejectedCount = editionsScanned - selectedEditions.length;
   
-  if (!config.dryRun) {
-    logger.info(`Inserting ${selectedEditions.length} editions`);
-    await copyFromArray(pool, '_import_editions', [
+  logger.info(`Inserting ${selectedEditions.length} editions`);
+  await copyFromArray(pool, '_import_editions', [
       'book_id', 'work_id', 'title', 'title_without_series', 'isbn', 'isbn13',
       'asin', 'kindle_asin', 'format', 'language_code', 'publisher', 'num_pages',
       'publication_year', 'publication_month', 'publication_day', 'description',
@@ -141,11 +148,10 @@ export async function phase02FilterEditions(
     logger.info(`Inserting ${uniqueWorkSeries.length} work series`);
     await copyFromArray(pool, '_import_work_series', ['work_id', 'series_id'], uniqueWorkSeries);
     
-    await pool.query('INSERT INTO _import_needed_series (series_id) SELECT DISTINCT series_id FROM _import_work_series ON CONFLICT DO NOTHING');
-  }
+  await pool.query('INSERT INTO _import_needed_series (series_id) SELECT DISTINCT series_id FROM _import_work_series ON CONFLICT DO NOTHING');
   
-  report.counts.editionsImported = selectedEditions.length;
-  report.counts.editionsRejected = rejectedCount;
+  report.counts.editionsRetained = selectedEditions.length;
+  report.counts.editionsRejectedByReason.cap = rejectedCount;
   
   await markPhaseDone(phaseName);
   logger.info(`Finished phase: ${phaseName}`);

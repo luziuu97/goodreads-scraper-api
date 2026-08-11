@@ -7,6 +7,7 @@ import {
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { parseLanguageParam } from "@/lib/languages";
 
 export const revalidate = 3600;
 
@@ -46,7 +47,7 @@ export async function GET(
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100)
       : 50;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 100)) {
       return NextResponse.json(
         {
           success: false,
@@ -69,7 +70,9 @@ export async function GET(
       );
     }
 
-    const language = req.nextUrl.searchParams.get("language") || "original";
+    const rawLanguage = req.nextUrl.searchParams.get("language") || "original";
+    const language = rawLanguage === "original" ? "original" : parseLanguageParam(rawLanguage);
+    if (!language) throw new Error("Invalid language parameter. Use original or a supported ISO code like en or es");
     const format = req.nextUrl.searchParams.get("format") || undefined;
 
     const cacheKey = buildLogicalCacheKey("get_series_details", {
@@ -125,7 +128,7 @@ export async function GET(
         : message.includes("HARDCOVER_API_TOKEN") ||
             message.includes("No configured book metadata providers")
           ? 503
-          : message.includes("No Hardcover series found")
+          : message.includes("No Hardcover series found") || message.includes("Series not found")
             ? 404
             : 500;
 

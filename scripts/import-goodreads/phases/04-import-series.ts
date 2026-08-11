@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { streamJsonl } from '../lib/stream';
-import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, markPhaseSkipped, copyFromArray } from '../lib/staging-db';
+import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, copyFromArray } from '../lib/staging-db';
 import { safeInt } from '../lib/normalize';
 import type { ProgressLogger } from '../lib/progress';
 import { type ImportReport, trackMemory } from '../lib/report';
@@ -20,7 +20,6 @@ export async function phase04ImportSeries(
   
   if (config.resume && status === 'done') {
     logger.info(`Skipping ${phaseName}`);
-    await markPhaseSkipped(phaseName);
     return;
   }
   
@@ -54,16 +53,14 @@ export async function phase04ImportSeries(
         primary_work_count: safeInt(record.primary_work_count) || 0
       });
     }
-  }, { batchSize: 10000 });
+  }, { progressEvery: 100000 });
   
-  if (!config.dryRun) {
-    logger.info(`Inserting ${seriesToInsert.length} series`);
-    await copyFromArray(pool, '_import_series_data', [
+  logger.info(`Inserting ${seriesToInsert.length} series`);
+  await copyFromArray(pool, '_import_series_data', [
       'series_id', 'title', 'description', 'note', 'numbered', 'series_works_count', 'primary_work_count'
     ], seriesToInsert.map(s => [
       s.series_id, s.title, s.description, s.note, s.numbered, s.series_works_count, s.primary_work_count
-    ]));
-  }
+  ]));
   
   report.counts = report.counts || {};
   report.counts.seriesImported = seriesToInsert.length;

@@ -1,4 +1,5 @@
 import { normalizeContributorRole } from '../lib/normalize';
+import { mapEditionAuthors } from '../phases/02-filter-editions';
 
 describe('Contributor role placement', () => {
   test('primary author role goes to WorkContributor (isEditionSpecific=false)', () => {
@@ -24,5 +25,17 @@ describe('Contributor role placement', () => {
   });
   test('unknown role maps to CONTRIBUTOR, EditionContributor', () => {
     expect(normalizeContributorRole('Something Else')).toEqual({ role: 'CONTRIBUTOR', isEditionSpecific: true });
+  });
+});
+
+describe('Contributor positions', () => {
+  test('the first listed author is position zero and can become primary', () => {
+    expect(mapEditionAuthors('10', [
+      { author_id: '20', role: 'Author' },
+      { author_id: '21', role: 'Author' },
+    ])).toEqual([
+      { book_id: 10, author_id: 20, role: 'Author', position: 0 },
+      { book_id: 10, author_id: 21, role: 'Author', position: 1 },
+    ]);
   });
 });

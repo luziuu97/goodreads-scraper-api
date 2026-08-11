@@ -2,7 +2,7 @@
 import 'dotenv/config';
 import { Command } from 'commander';
 import fs from 'fs';
-import { getPool, createStagingTables, dropStagingTables, closePool, getPhaseStatus } from './lib/staging-db';
+import { getPool, createStagingTables, dropStagingTables, resetStagingTables, closePool } from './lib/staging-db';
 import { createProgressLogger } from './lib/progress';
 import { createReport, saveReport } from './lib/report';
 import { phase01SelectWorks } from './phases/01-select-works';
@@ -70,7 +70,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const logger = createProgressLogger();
-const report = createReport();
+const report = createReport(config);
 
 console.log(`====================================
   Goodreads Dataset Importer
@@ -95,6 +95,11 @@ async function main() {
     console.log('Creating staging tables if not exists...');
     await createStagingTables(pool);
 
+    if (!config.resume) {
+      console.log('Clearing staging data for a fresh import...');
+      await resetStagingTables(pool);
+    }
+
     console.log('Starting phases...');
 
     await phase01SelectWorks(config, report, logger);
@@ -102,6 +107,22 @@ async function main() {
     await phase03ImportAuthors(config, report, logger);
     await phase04ImportSeries(config, report, logger);
     await phase05ImportGenres(config, report, logger);
+
+    // Rehydrate summary counts when completed phases were skipped during resume.
+    const stagedCounts = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM _import_works)::int AS works,
+        (SELECT COUNT(*) FROM _import_editions)::int AS editions,
+        (SELECT COUNT(*) FROM _import_author_data)::int AS authors,
+        (SELECT COUNT(*) FROM _import_series_data)::int AS series,
+        (SELECT COUNT(*) FROM _import_work_genres)::int AS genres
+    `);
+    const counts = stagedCounts.rows[0];
+    report.counts.worksSelected = counts.works;
+    report.counts.editionsRetained = counts.editions;
+    report.counts.authorsImported = counts.authors;
+    report.counts.seriesImported = counts.series;
+    report.counts.genresImported = counts.genres;
     
     if (!config.dryRun) {
       await phase06Finalize(config, report, logger);

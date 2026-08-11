@@ -135,7 +135,7 @@ export function scoreRelevance(book: NormalizedSearchBook, query: string): numbe
   return score;
 }
 
-const PRIMARY_PROVIDERS = new Set<ProviderId>(["goodreads", "hardcover"]);
+const PRIMARY_PROVIDERS = new Set<ProviderId>(["canonical", "goodreads", "hardcover"]);
 
 function isPrimaryProvider(providerId?: string | null): boolean {
   return providerId ? PRIMARY_PROVIDERS.has(providerId as ProviderId) : false;
@@ -397,11 +397,12 @@ export async function searchAggregate(
   input: BookSearchInput
 ): Promise<NormalizedSearchResponse> {
   const targetLanguage = input.language ? toIso639_1(input.language) : null;
+  let localBooks: NormalizedSearchBook[] = [];
   // Postgres is the canonical read-through store. A local hit is complete for
   // this request and avoids spending provider quota or adding network latency —
   // but only when the results pass a completeness threshold.
   try {
-    const localBooks = await searchCanonicalBooks(input);
+    localBooks = await searchCanonicalBooks(input);
     const matchingLocalBooks = targetLanguage
       ? localBooks.filter(
           (book) =>
@@ -429,14 +430,16 @@ export async function searchAggregate(
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
-  const settled = await Promise.allSettled(providers.map((p) => p.search(input)));
+  const primaryProviders = providers.filter((provider) => isPrimaryProvider(provider.id));
+  const backupProviders = providers.filter((provider) => !isPrimaryProvider(provider.id));
+  const primarySettled = await Promise.allSettled(primaryProviders.map((p) => p.search(input)));
 
-  const books: NormalizedSearchBook[] = [];
+  const books: NormalizedSearchBook[] = [...localBooks];
   let lastError: Error | null = null;
 
-  for (let i = 0; i < settled.length; i++) {
-    const result = settled[i];
-    const provider = providers[i];
+  for (let i = 0; i < primarySettled.length; i++) {
+    const result = primarySettled[i];
+    const provider = primaryProviders[i];
     if (result.status === "fulfilled") {
       books.push(...result.value);
     } else {
@@ -457,10 +460,51 @@ export async function searchAggregate(
     }
   }
 
-  const merged = await groupAndMergeByWork(books, input.query);
+  // Backup providers enrich primary/canonical structure; they never introduce
+  // standalone works. Avoid their latency/quota when primary hits are complete.
+  const primaryBooks = books.filter((book) => isPrimaryProvider(book.provider));
+  const needsBackup = books.length > 0 && books.some(
+    (book) => !book.isbn || !book.cover || !book.publicationDate || !book.language
+  );
+  let backupSettled: PromiseSettledResult<NormalizedSearchBook[]>[] = [];
+  if (needsBackup) {
+    backupSettled = await Promise.allSettled(backupProviders.map((p) => p.search(input)));
+    for (let i = 0; i < backupSettled.length; i++) {
+      const result = backupSettled[i];
+      if (result.status === "fulfilled") books.push(...result.value);
+      else lastError = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+    }
+  }
+
+  if (books.length === 0 || (localBooks.length === 0 && primaryBooks.length === 0)) {
+    if (lastError && primarySettled.every((result) => result.status === "rejected")) throw lastError;
+    return {
+      success: true,
+      provider: "aggregate",
+      results: { query: input.query, totalResults: 0, books: [] },
+    };
+  }
+
+  const exactQueryIsbn = normalizeIsbn(input.query);
+  const exactIsbnCandidates = exactQueryIsbn
+    ? books.filter((book) => [
+        book.isbn,
+        book.isbn10,
+        book.edition?.isbn,
+        book.edition?.isbn10,
+        ...(book.editions || []).flatMap((edition) => [edition.isbn, edition.isbn10]),
+      ].some((value) => normalizeIsbn(value) === exactQueryIsbn))
+    : [];
+  // An exact Hardcover edition is stronger evidence than a bulk-dataset row,
+  // which may occasionally carry an ISBN copied onto the wrong work.
+  const hardcoverExactCandidates = exactIsbnCandidates.filter((book) => book.provider === "hardcover");
+  const structuralCandidates = exactQueryIsbn
+    ? (hardcoverExactCandidates.length > 0 ? hardcoverExactCandidates : exactIsbnCandidates)
+    : books;
+  const merged = await groupAndMergeByWork(structuralCandidates, input.query);
 
   // Prioritize hits matching language preference or ISBNDB hits when searching by ISBN
-  const cleanQueryIsbn = normalizeIsbn(input.query);
+  const cleanQueryIsbn = exactQueryIsbn;
   const targetIso1 = targetLanguage;
 
   // `language` is a filter, not merely a ranking hint. Providers which cannot
@@ -494,7 +538,7 @@ export async function searchAggregate(
   const finalBooks = languageFiltered.slice(0, input.limit);
 
   // If every provider failed and we have no books, surface the error.
-  if (finalBooks.length === 0 && lastError && settled.every((r) => r.status === "rejected")) {
+  if (finalBooks.length === 0 && lastError && primarySettled.every((r) => r.status === "rejected")) {
     throw lastError;
   }
 
@@ -550,13 +594,27 @@ export async function getDetailsAggregate(
 
   ensureProvidersConfigured();
 
-  // Parallel Provider Details Fetch & Prioritized Merge
   const providers = listAvailableProviders();
-  const settled = await Promise.allSettled(providers.map((p) => p.getDetails(input)));
+  const primaryProviders = providers.filter((provider) => isPrimaryProvider(provider.id));
+  const backupProviders = providers.filter((provider) => !isPrimaryProvider(provider.id));
+  const primarySettled = await Promise.allSettled(primaryProviders.map((p) => p.getDetails(input)));
+  const primaryFulfilled = primarySettled
+    .map((res, idx) => ({ res, provider: primaryProviders[idx] }))
+    .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof primaryProviders)[number] } => item.res.status === "fulfilled");
+
+  const needsBackup = primaryFulfilled.length > 0 && primaryFulfilled.some(({ res }) => {
+    const book: any = res.value.book || {};
+    return !book.description || !book.publisher || !book.pages || !(book.isbn || book.isbn13 || book.edition?.isbn);
+  });
+  const backupSettled = needsBackup
+    ? await Promise.allSettled(backupProviders.map((p) => p.getDetails(input)))
+    : [];
+  const settled = [...primarySettled, ...backupSettled];
+  const settledProviders = [...primaryProviders, ...(needsBackup ? backupProviders : [])];
 
   const fulfilled = settled
-    .map((res, idx) => ({ res, provider: providers[idx] }))
-    .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof providers)[number] } => item.res.status === "fulfilled");
+    .map((res, idx) => ({ res, provider: settledProviders[idx] }))
+    .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof settledProviders)[number] } => item.res.status === "fulfilled");
 
   if (fulfilled.length === 0) {
     const firstErr = settled.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
@@ -878,7 +936,7 @@ export async function getCoversAggregate(
             id: localWork.id,
             slug: localWork.slug,
             title: localWork.canonicalTitle,
-            provider: "isbndb",
+            provider: "canonical",
           },
           covers: filtered,
           bestByResolution: {

@@ -3,7 +3,7 @@
  * Add new provider ids to ProviderId as they are implemented and registered.
  */
 
-export type ProviderId = "hardcover" | "openlibrary" | "isbndb" | "goodreads";
+export type ProviderId = "canonical" | "hardcover" | "openlibrary" | "isbndb" | "goodreads";
 export type MetadataSourceId = ProviderId | "goodreads-dataset";
 
 /** Dispatch modes accepted by the public API (includes virtual aggregate). */

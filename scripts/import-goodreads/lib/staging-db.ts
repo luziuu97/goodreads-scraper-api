@@ -14,7 +14,7 @@ export function getPool(): Pool {
   return _pool;
 }
 
-export async function createStagingTables(client?: PoolClient): Promise<void> {
+export async function createStagingTables(client?: Pool | PoolClient): Promise<void> {
   const query = `
 -- Selected works from popularity ranking (Phase 1 output)
 CREATE TABLE IF NOT EXISTS _import_works (
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS _import_state (
   await executor.query(query);
 }
 
-export async function dropStagingTables(client?: PoolClient): Promise<void> {
+export async function dropStagingTables(client?: Pool | PoolClient): Promise<void> {
   const query = `
     DROP TABLE IF EXISTS _import_state;
     DROP TABLE IF EXISTS _import_work_genres;
@@ -138,6 +138,23 @@ export async function dropStagingTables(client?: PoolClient): Promise<void> {
   `;
   const executor = client || getPool();
   await executor.query(query);
+}
+
+export async function resetStagingTables(client?: Pool | PoolClient): Promise<void> {
+  const executor = client || getPool();
+  await executor.query(`
+    TRUNCATE TABLE
+      _import_work_genres,
+      _import_series_data,
+      _import_work_series,
+      _import_needed_series,
+      _import_author_data,
+      _import_needed_authors,
+      _import_edition_authors,
+      _import_editions,
+      _import_works,
+      _import_state;
+  `);
 }
 
 export async function getPhaseStatus(phaseKey: string): Promise<'pending' | 'running' | 'done' | 'skipped'> {
@@ -193,7 +210,7 @@ export async function closePool(): Promise<void> {
 }
 
 export async function copyFromArray<T>(
-  client: PoolClient,
+  client: Pool | PoolClient,
   tableName: string,
   columns: string[],
   rows: T[][],

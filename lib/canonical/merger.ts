@@ -6,6 +6,8 @@ import {
   normalizeAuthorSlug,
   normalizeBookFormat,
   normalizeLanguageCode,
+  normalizeSearchText,
+  normalizeValidIsbn,
   normalizeAndRankCategories,
   parseAuthorNames,
 } from "@/lib/canonical/constants";
@@ -151,6 +153,8 @@ export async function upsertCanonicalWorkFromProvider(
     seriesPosition,
     seriesDescription,
   } = input;
+  let validIsbn10 = normalizeValidIsbn(isbn10);
+  let validIsbn13 = normalizeValidIsbn(isbn13);
 
   const langCode = normalizeLanguageCode(input.language);
   const bookFormat = normalizeBookFormat(input.format);
@@ -214,28 +218,70 @@ export async function upsertCanonicalWorkFromProvider(
     if (map) existingWorkId = map.workId;
   }
 
-  if (!existingWorkId && (isbn13 || isbn10 || asin)) {
+  if (!existingWorkId && (validIsbn13 || validIsbn10 || asin)) {
     const edition = await prisma.edition.findFirst({
       where: {
         OR: [
-          ...(isbn13 ? [{ isbn13 }] : []),
-          ...(isbn10 ? [{ isbn10 }] : []),
+          ...(validIsbn13 ? [{ isbn13: validIsbn13 }] : []),
+          ...(validIsbn10 ? [{ isbn10: validIsbn10 }] : []),
           ...(asin ? [{ asin }] : []),
         ],
       },
-      select: { workId: true },
+      include: {
+        work: {
+          include: {
+            titles: true,
+            contributors: { include: { author: true } },
+          },
+        },
+      },
     });
-    if (edition) existingWorkId = edition.workId;
+    if (edition) {
+      const incomingTitle = normalizeSearchText(canonicalTitleStr);
+      const knownTitles = [
+        edition.work.canonicalTitle,
+        ...edition.work.titles.map((item) => item.title),
+      ].map(normalizeSearchText);
+      const titleAgrees = knownTitles.some(
+        (known) => known === incomingTitle || known.includes(incomingTitle) || incomingTitle.includes(known)
+      );
+      const incomingAuthor = normalizeAuthorSlug(effectiveAuthorName);
+      const authorAgrees = !incomingAuthor || edition.work.contributors.some(
+        (item) => normalizeAuthorSlug(item.author.name) === incomingAuthor
+      );
+
+      if (titleAgrees && authorAgrees) {
+        existingWorkId = edition.workId;
+      } else {
+        const conflict = {
+          isbn13: validIsbn13,
+          isbn10: validIsbn10,
+          incomingTitle: canonicalTitleStr,
+          existingTitle: edition.work.canonicalTitle,
+          existingWorkId: edition.workId,
+          provider,
+        };
+        console.error("Canonical ISBN conflict quarantined", conflict);
+        await prisma.dataConflict.create({
+          data: {
+            type: "ISBN_WORK_MISMATCH",
+            identifier: validIsbn13 || validIsbn10 || "unknown",
+            existingWorkId: edition.workId,
+            provider,
+            incomingData: conflict,
+          },
+        }).catch((error) => console.error("Failed to persist data conflict", error));
+        validIsbn10 = null;
+        validIsbn13 = null;
+      }
+    }
   }
 
   // 3b. Title + primary author fallback: if the originalTitle (canonical English
   //     work title) matches an existing WorkTitle row AND the author matches,
   //     attach this as a new edition of that work instead of creating a duplicate.
   if (!existingWorkId && authorId) {
-    const normalizedCanonical = canonicalTitleStr
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
+    const normalizedCanonical = normalizeSearchText(canonicalTitleStr);
 
     const titleMatch = await prisma.workTitle.findFirst({
       where: {
@@ -420,7 +466,7 @@ export async function upsertCanonicalWorkFromProvider(
       },
     });
 
-    const normalizedTitle = title.trim().toLowerCase().replace(/\s+/g, " ");
+    const normalizedTitle = normalizeSearchText(title);
     await prisma.workTitle.upsert({
       where: {
         workId_language_normalizedTitle: {
@@ -460,20 +506,20 @@ export async function upsertCanonicalWorkFromProvider(
 
   // 7. Edition & Covers Upsert
   let editionId: string | null = null;
-  if (isbn13 || isbn10 || asin || providerEditionId) {
+  if (validIsbn13 || validIsbn10 || asin || providerEditionId) {
     const mappedEdition = providerEditionId
       ? await prisma.editionExternalId.findUnique({
           where: { provider_externalId: { provider, externalId: providerEditionId } },
           include: { edition: true },
         })
       : null;
-    const existingEdition = mappedEdition?.edition || (isbn13 || isbn10 || asin
+    const existingEdition = mappedEdition?.edition || (validIsbn13 || validIsbn10 || asin
       ? await prisma.edition.findFirst({
           where: {
             workId,
             OR: [
-              ...(isbn13 ? [{ isbn13 }] : []),
-              ...(isbn10 ? [{ isbn10 }] : []),
+              ...(validIsbn13 ? [{ isbn13: validIsbn13 }] : []),
+              ...(validIsbn10 ? [{ isbn10: validIsbn10 }] : []),
               ...(asin ? [{ asin }] : []),
             ],
           },
@@ -491,8 +537,8 @@ export async function upsertCanonicalWorkFromProvider(
           audioLengthMinutes: typeof input.audioLengthMinutes === "number" && input.audioLengthMinutes > 0 ? input.audioLengthMinutes : (existingEdition.audioLengthMinutes || undefined),
           format: bookFormat || existingEdition.format || undefined,
           language: langCode !== "und" ? langCode : (existingEdition.language || undefined),
-          isbn10: isbn10 || existingEdition.isbn10 || undefined,
-          isbn13: isbn13 || existingEdition.isbn13 || undefined,
+          isbn10: validIsbn10 || existingEdition.isbn10 || undefined,
+          isbn13: validIsbn13 || existingEdition.isbn13 || undefined,
         },
       });
     } else {
@@ -503,8 +549,8 @@ export async function upsertCanonicalWorkFromProvider(
           title: title.trim(),
           format: bookFormat,
           language: langCode,
-          isbn10: isbn10 || null,
-          isbn13: isbn13 || null,
+          isbn10: validIsbn10,
+          isbn13: validIsbn13,
           asin: asin || null,
           publisher: publisher || null,
           publicationDate: publicationDate || null,
@@ -630,7 +676,7 @@ export async function upsertCanonicalWorkFromProvider(
   // 9. Register Redis Lookups
   await registerCanonicalLookups({
     workId,
-    isbns: [isbn13, isbn10, asin],
+    isbns: [validIsbn13, validIsbn10, asin],
     providerWorkIds: providerWorkId ? [{ provider, id: providerWorkId }] : [],
   });
 

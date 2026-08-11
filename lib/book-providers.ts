@@ -1,4 +1,3 @@
-import { prisma } from "@/lib/db";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
@@ -135,7 +134,7 @@ export async function batchSearchBooksByProvider(input: {
       limit,
       query,
       language: language || "",
-    });
+    }, "v1");
 
     processableItems.push({
       index: i,
@@ -174,118 +173,10 @@ export async function batchSearchBooksByProvider(input: {
     new Map(cacheMisses.map((item) => [item.cacheKey, item])).values()
   );
 
-  // Try resolving all local ISBN hits with one database query.
-  const remainingMisses: ProcessableItem[] = [];
-  const isbnByCacheKey = new Map<string, string>();
-  for (const miss of uniqueMisses) {
-    const cleanIsbn = miss.query.replace(/[^0-9X]/gi, "").toUpperCase();
-    if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
-      isbnByCacheKey.set(miss.cacheKey, cleanIsbn);
-    }
-  }
-
-  let editionsByIsbn = new Map<string, any>();
-  if (isbnByCacheKey.size > 0) {
-    try {
-      const isbns = Array.from(new Set(isbnByCacheKey.values()));
-      const editions = await prisma.edition.findMany({
-        where: {
-          OR: [
-            { isbn13: { in: isbns } },
-            { isbn10: { in: isbns } },
-            { asin: { in: isbns } },
-          ],
-        },
-        include: {
-          work: {
-            include: {
-              contributors: {
-                include: { author: true },
-                orderBy: { position: "asc" },
-              },
-              genres: { include: { genre: true } },
-            },
-          },
-          covers: true,
-        },
-      });
-      for (const edition of editions) {
-        for (const value of [edition.isbn13, edition.isbn10, edition.asin]) {
-          if (value && !editionsByIsbn.has(value.toUpperCase())) {
-            editionsByIsbn.set(value.toUpperCase(), edition);
-          }
-        }
-      }
-    } catch {
-      // Ignore DB lookup errors and proceed to providers.
-      editionsByIsbn = new Map();
-    }
-  }
-
-  for (const miss of uniqueMisses) {
-    const cleanIsbnStr = isbnByCacheKey.get(miss.cacheKey);
-    const dbEd = cleanIsbnStr ? editionsByIsbn.get(cleanIsbnStr) : undefined;
-    if (dbEd) {
-            const defaultCover = dbEd.covers.find((c: { isDefault: boolean }) => c.isDefault) || dbEd.covers[0];
-            const searchBook: NormalizedSearchBook = {
-              id: dbEd.work.id,
-              provider: "isbndb",
-              title: dbEd.title || dbEd.work.canonicalTitle,
-              workTitle: dbEd.work.canonicalTitle,
-              author:
-                dbEd.work.contributors.find(
-                  (item: { isPrimary: boolean }) => item.isPrimary
-                )?.author.name ||
-                dbEd.work.contributors[0]?.author.name ||
-                "Unknown Author",
-              cover: defaultCover?.url || "",
-              rating: dbEd.work.averageRating ?? undefined,
-              publicationDate: dbEd.publicationDate || (dbEd.work.publicationYear ? String(dbEd.work.publicationYear) : undefined),
-              genres: dbEd.work.genres.map((g: { genre: { name: string } }) => g.genre.name),
-              isbn: dbEd.isbn13 || dbEd.isbn10 || null,
-              isbn10: dbEd.isbn10 || null,
-              language: dbEd.language || null,
-              presentation: "isbn" as const,
-              edition: {
-                id: 0,
-                title: dbEd.title,
-                isbn: dbEd.isbn13,
-                isbn10: dbEd.isbn10,
-                asin: dbEd.asin,
-                format: dbEd.format,
-                publicationDate: dbEd.publicationDate,
-                pages: dbEd.pages,
-                publisher: dbEd.publisher,
-                language: dbEd.language,
-                languageCode: null,
-                country: null,
-                countryCode: null,
-                cover: defaultCover?.url || "",
-              },
-            };
-
-            const responseData = {
-              success: true,
-              provider: "aggregate",
-              results: {
-                query: miss.query,
-                totalResults: 1,
-                books: [searchBook],
-              },
-            };
-
-            results[miss.index] = {
-              index: miss.index,
-              query: miss.query,
-              success: true,
-              books: [searchBook],
-            };
-
-            await setCachedResponse(miss.cacheKey, responseData, CACHE_TTL_SEARCH);
-      continue;
-    }
-    remainingMisses.push(miss);
-  }
+  // Use the same canonical/provider pipeline as single search. A separate
+  // ISBN fast path previously selected an arbitrary edition when duplicate
+  // identifiers existed and made batch results disagree with GET search.
+  const remainingMisses = uniqueMisses;
 
   // 2. Process remaining cache misses with max concurrency limit of 5
   const CONCURRENCY_LIMIT = 5;

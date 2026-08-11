@@ -17,6 +17,14 @@ describe('normalizeIsbn', () => {
     expect(normalizeIsbn('12345')).toBeNull();
     expect(normalizeIsbn('123456789012345')).toBeNull();
   });
+  test('rejects invalid checksums', () => {
+    expect(normalizeIsbn('9783161484101')).toBeNull();
+    expect(normalizeIsbn('0975229800')).toBeNull();
+  });
+  test('enforces the destination ISBN length', () => {
+    expect(normalizeIsbn('097522980X', 13)).toBeNull();
+    expect(normalizeIsbn('9783161484100', 10)).toBeNull();
+  });
   test('handles ISBN-10 with X check digit', () => {
     expect(normalizeIsbn('097522980X')).toBe('097522980X');
   });

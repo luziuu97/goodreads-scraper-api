@@ -61,6 +61,7 @@ export async function phase08Dump(
       '-Fc',
       '--no-owner',
       '--no-acl',
+      '--exclude-table=_import_*',
       '-h', host,
       '-p', port,
       '-U', user,

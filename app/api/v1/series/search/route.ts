@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 50)
       : 10;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 50)) {
       return NextResponse.json(
         { error: "Invalid limit parameter. Must be a number between 1 and 50" },
         { status: 400 }

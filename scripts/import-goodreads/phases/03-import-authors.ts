@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { streamJsonl } from '../lib/stream';
-import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, markPhaseSkipped, copyFromArray } from '../lib/staging-db';
+import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, copyFromArray } from '../lib/staging-db';
 import { safeInt } from '../lib/normalize';
 import type { ProgressLogger } from '../lib/progress';
 import { type ImportReport, trackMemory } from '../lib/report';
@@ -20,7 +20,6 @@ export async function phase03ImportAuthors(
   
   if (config.resume && status === 'done') {
     logger.info(`Skipping ${phaseName}`);
-    await markPhaseSkipped(phaseName);
     return;
   }
   
@@ -49,12 +48,10 @@ export async function phase03ImportAuthors(
         name: record.name || ''
       });
     }
-  }, { batchSize: 10000 });
+  }, { progressEvery: 100000 });
   
-  if (!config.dryRun) {
-    logger.info(`Inserting ${authorsToInsert.length} authors`);
-    await copyFromArray(pool, '_import_author_data', ['author_id', 'name'], authorsToInsert.map(a => [a.author_id, a.name]));
-  }
+  logger.info(`Inserting ${authorsToInsert.length} authors`);
+  await copyFromArray(pool, '_import_author_data', ['author_id', 'name'], authorsToInsert.map(a => [a.author_id, a.name]));
   
   report.counts = report.counts || {};
   report.counts.authorsImported = authorsToInsert.length;

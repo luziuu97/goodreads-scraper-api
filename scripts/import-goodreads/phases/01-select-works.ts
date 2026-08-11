@@ -3,7 +3,7 @@ import path from 'node:path';
 import { streamJsonl } from '../lib/stream';
 import { BoundedTopHeap } from '../lib/heap';
 import { safeInt } from '../lib/normalize';
-import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, markPhaseSkipped, copyFromArray } from '../lib/staging-db';
+import { getPool, getPhaseStatus, markPhaseStarted, markPhaseDone, copyFromArray } from '../lib/staging-db';
 import { DuplicateDetector } from '../lib/duplicate-detector';
 import type { ProgressLogger } from '../lib/progress';
 import { type ImportReport, trackMemory } from '../lib/report';
@@ -23,7 +23,6 @@ export async function phase01SelectWorks(
   
   if (config.resume && status === 'done') {
     logger.info(`Skipping ${phaseName} (already done)`);
-    await markPhaseSkipped(phaseName);
     return;
   }
   
@@ -91,9 +90,8 @@ export async function phase01SelectWorks(
     rank_position: idx + 1
   }));
   
-  if (!config.dryRun) {
-    logger.info(`Inserting ${finalWorks.length} works into _import_works`);
-    await copyFromArray(pool, '_import_works', [
+  logger.info(`Inserting ${finalWorks.length} works into _import_works`);
+  await copyFromArray(pool, '_import_works', [
       'work_id', 'best_book_id', 'original_title', 'original_language_id', 
       'original_publication_year', 'ratings_count', 'ratings_sum', 'text_reviews_count',
       'reviews_count', 'books_count', 'media_type', 'popularity_score', 'rank_position'
@@ -101,8 +99,7 @@ export async function phase01SelectWorks(
       w.work_id, w.best_book_id, w.original_title, w.original_language_id,
       w.original_publication_year, w.ratings_count, w.ratings_sum, w.text_reviews_count,
       w.reviews_count, w.books_count, w.media_type, w.popularity_score, w.rank_position
-    ]));
-  }
+  ]));
   
   report.counts = report.counts || {};
   report.counts.worksSelected = finalWorks.length;

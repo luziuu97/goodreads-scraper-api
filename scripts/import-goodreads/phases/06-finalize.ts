@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { getPool, markPhaseStarted, markPhaseDone, getPhaseStatus, copyFromArray } from '../lib/staging-db';
+import { getPool, markPhaseStarted, getPhaseStatus, copyFromArray } from '../lib/staging-db';
 import { makeAuthorSlug, makeUniqueSlug, makeSeriesSlug } from '../lib/slug';
 import { ProgressLogger } from '../lib/progress';
 import { ImportReport } from '../lib/report';
@@ -34,6 +34,8 @@ export async function phase06Finalize(
   const client = await pool.connect();
   
   try {
+    await client.query('BEGIN');
+
     // 6.1: Authors
     logger.info('Sub-phase 6.1: Authors');
     const existingSlugsRes = await client.query(`SELECT slug FROM "Author"`);
@@ -58,8 +60,11 @@ export async function phase06Finalize(
         authorRows.push([id, row.name || 'Unknown Author', slug]);
         authorExtRows.push([crypto.randomUUID(), 'goodreads-dataset', String(row.author_id), id]);
       }
-      await copyFromArray(client, 'Author', ['id', 'name', 'slug'], authorRows);
-      await copyFromArray(client, 'AuthorExternalId', ['id', 'provider', 'externalId', 'authorId'], authorExtRows);
+      const authorsInserted = await copyFromArray(client, 'Author', ['id', 'name', 'slug'], authorRows);
+      const authorIdsInserted = await copyFromArray(client, 'AuthorExternalId', ['id', 'provider', 'externalId', 'authorId'], authorExtRows);
+      if (authorsInserted !== authorRows.length || authorIdsInserted !== authorExtRows.length) {
+        throw new Error(`Author insert conflict: expected ${authorRows.length}, inserted ${authorsInserted} authors and ${authorIdsInserted} external IDs`);
+      }
       logger.info(`Inserted ${authorRows.length} authors`);
     }
 
@@ -87,8 +92,11 @@ export async function phase06Finalize(
         seriesRows.push([id, slug, row.title || 'Unknown Series', safeInt(row.primary_work_count) || 0]);
         seriesExtRows.push([crypto.randomUUID(), 'goodreads-dataset', String(row.series_id), id]);
       }
-      await copyFromArray(client, 'Series', ['id', 'slug', 'canonicalName', 'booksCount'], seriesRows);
-      await copyFromArray(client, 'SeriesExternalId', ['id', 'provider', 'externalId', 'seriesId'], seriesExtRows);
+      const seriesInserted = await copyFromArray(client, 'Series', ['id', 'slug', 'canonicalName', 'booksCount'], seriesRows);
+      const seriesIdsInserted = await copyFromArray(client, 'SeriesExternalId', ['id', 'provider', 'externalId', 'seriesId'], seriesExtRows);
+      if (seriesInserted !== seriesRows.length || seriesIdsInserted !== seriesExtRows.length) {
+        throw new Error(`Series insert conflict: expected ${seriesRows.length}, inserted ${seriesInserted} series and ${seriesIdsInserted} external IDs`);
+      }
       logger.info(`Inserted ${seriesRows.length} series`);
     }
 
@@ -131,12 +139,15 @@ export async function phase06Finalize(
         ]);
         workExtRows.push([crypto.randomUUID(), 'goodreads-dataset', String(row.work_id), id]);
       }
-      await copyFromArray(client, 'Work', [
+      const worksInserted = await copyFromArray(client, 'Work', [
         'id', 'slug', 'canonicalTitle', 'originalLanguage', 'publicationYear',
         'averageRating', 'ratingsCount', 'reviewsCount', 'textReviewsCount', 'popularityScore',
         'createdAt', 'updatedAt'
       ], workRows);
-      await copyFromArray(client, 'WorkExternalId', ['id', 'provider', 'externalId', 'workId'], workExtRows);
+      const workIdsInserted = await copyFromArray(client, 'WorkExternalId', ['id', 'provider', 'externalId', 'workId'], workExtRows);
+      if (worksInserted !== workRows.length || workIdsInserted !== workExtRows.length) {
+        throw new Error(`Work insert conflict: expected ${workRows.length}, inserted ${worksInserted} works and ${workIdsInserted} external IDs`);
+      }
       logger.info(`Inserted ${workRows.length} works`);
     }
 
@@ -165,7 +176,7 @@ export async function phase06Finalize(
         ie.book_id, ie.work_id, ie.title, ie.isbn, ie.isbn13, ie.asin,
         ie.format, ie.language_code, ie.publisher, ie.num_pages,
         ie.publication_year, ie.publication_month, ie.publication_day,
-        ie.description, ie.is_default,
+        ie.description, ie.is_default, ie.ratings_count, ie.text_reviews_count,
         we."workId" as "dbWorkId"
       FROM _import_editions ie
       JOIN "WorkExternalId" we ON we."externalId" = ie.work_id::text AND we.provider = 'goodreads-dataset'
@@ -182,8 +193,8 @@ export async function phase06Finalize(
         const id = crypto.randomUUID();
         const format = normalizeBookFormat(row.format) || null;
         const lang = normalizeLanguageCode(row.language_code) || null;
-        const isbn10 = normalizeIsbn(row.isbn) || null;
-        const isbn13 = normalizeIsbn(row.isbn13) || null;
+        const isbn10 = normalizeIsbn(row.isbn, 10) || null;
+        const isbn13 = normalizeIsbn(row.isbn13, 13) || null;
         const asin = row.asin || null;
         const pubDate = normalizePublicationDate(row.publication_year, row.publication_month, row.publication_day);
         const pages = safeInt(row.num_pages) || null;
@@ -198,14 +209,34 @@ export async function phase06Finalize(
         ]);
         editionExtRows.push([crypto.randomUUID(), 'goodreads-dataset', String(row.book_id), id]);
       }
-      await copyFromArray(client, 'Edition', [
+      const editionsInserted = await copyFromArray(client, 'Edition', [
         'id', 'workId', 'title', 'format', 'language', 'isbn10', 'isbn13', 'asin',
         'publisher', 'publicationDate', 'pages', 'isDefault', 'ratingsCount',
         'textReviewsCount', 'createdAt', 'updatedAt'
       ], editionRows);
-      await copyFromArray(client, 'EditionExternalId', ['id', 'provider', 'externalId', 'editionId'], editionExtRows);
+      const editionIdsInserted = await copyFromArray(client, 'EditionExternalId', ['id', 'provider', 'externalId', 'editionId'], editionExtRows);
+      if (editionsInserted !== editionRows.length || editionIdsInserted !== editionExtRows.length) {
+        throw new Error(`Edition insert conflict: expected ${editionRows.length}, inserted ${editionsInserted} editions and ${editionIdsInserted} external IDs`);
+      }
       logger.info(`Inserted ${editionRows.length} editions`);
     }
+
+    // Keep mutable statistics in sync on idempotent re-runs as well.
+    await client.query(`
+      UPDATE "Edition" e
+      SET
+        "ratingsCount" = ie.ratings_count,
+        "textReviewsCount" = ie.text_reviews_count,
+        "updatedAt" = NOW()
+      FROM _import_editions ie
+      JOIN "EditionExternalId" ee
+        ON ee."externalId" = ie.book_id::text AND ee.provider = 'goodreads-dataset'
+      WHERE e.id = ee."editionId"
+        AND (
+          e."ratingsCount" IS DISTINCT FROM ie.ratings_count
+          OR e."textReviewsCount" IS DISTINCT FROM ie.text_reviews_count
+        );
+    `);
 
     // 6.6: Edition Covers
     logger.info('Sub-phase 6.6: Edition Covers');
@@ -237,19 +268,38 @@ export async function phase06Finalize(
     // 6.7: WorkContributors
     logger.info('Sub-phase 6.7: WorkContributors (AUTHOR)');
     await client.query(`
+      WITH candidates AS (
+        SELECT DISTINCT ON (we."workId", ae."authorId")
+          we."workId",
+          ae."authorId",
+          iea.position,
+          ie.is_default
+        FROM _import_edition_authors iea
+        JOIN _import_editions ie ON ie.book_id = iea.book_id
+        JOIN "WorkExternalId" we ON we."externalId" = ie.work_id::text AND we.provider = 'goodreads-dataset'
+        JOIN "AuthorExternalId" ae ON ae."externalId" = iea.author_id::text AND ae.provider = 'goodreads-dataset'
+        WHERE iea.role = '' OR iea.role IS NULL OR iea.role = 'Author'
+        ORDER BY we."workId", ae."authorId", ie.is_default DESC, iea.position
+      ), ranked AS (
+        SELECT
+          candidates.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY "workId"
+            ORDER BY is_default DESC, position, "authorId"
+          ) AS author_rank
+        FROM candidates
+      )
       INSERT INTO "WorkContributor" ("workId", "authorId", role, position, "isPrimary")
-      SELECT DISTINCT ON (we."workId", ae."authorId")
-        we."workId",
-        ae."authorId",
+      SELECT
+        "workId",
+        "authorId",
         'AUTHOR',
-        iea.position,
-        iea.position = 0
-      FROM _import_edition_authors iea
-      JOIN _import_editions ie ON ie.book_id = iea.book_id
-      JOIN "WorkExternalId" we ON we."externalId" = ie.work_id::text AND we.provider = 'goodreads-dataset'
-      JOIN "AuthorExternalId" ae ON ae."externalId" = iea.author_id::text AND ae.provider = 'goodreads-dataset'
-      WHERE iea.role = '' OR iea.role IS NULL OR iea.role = 'Author'
-      ON CONFLICT ("workId", "authorId", role) DO NOTHING;
+        position,
+        author_rank = 1
+      FROM ranked
+      ON CONFLICT ("workId", "authorId", role) DO UPDATE SET
+        position = EXCLUDED.position,
+        "isPrimary" = EXCLUDED."isPrimary";
     `);
 
     // 6.8: EditionContributors
@@ -348,8 +398,18 @@ export async function phase06Finalize(
       ON CONFLICT ("workId", "genreId", source) DO NOTHING;
     `);
 
-    await markPhaseDone(phaseKey);
+    await client.query(`
+      INSERT INTO _import_state (phase_key, status, completed_at)
+      VALUES ($1, 'done', NOW())
+      ON CONFLICT (phase_key) DO UPDATE SET
+        status = 'done',
+        completed_at = NOW()
+    `, [phaseKey]);
+    await client.query('COMMIT');
     logger.info('Phase 06 finalize completed.');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
   } finally {
     client.release();
   }

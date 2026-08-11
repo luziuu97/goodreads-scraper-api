@@ -15,7 +15,8 @@
     "postinstall": "prisma generate",
     "import:goodreads": "tsx scripts/import-goodreads/index.ts",
     "import:goodreads:dev": "tsx scripts/import-goodreads/index.ts --works 100 --editions-per-work 5",
-    "test:importer": "jest --config scripts/import-goodreads/jest.config.js"
+    "test:importer": "jest --config scripts/import-goodreads/jest.config.js",
+    "audit:canonical": "tsx scripts/audit-canonical-data.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
@@ -49,6 +50,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "dotenv": "^17.4.2",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^13.1.0",
     "input-otp": "^1.4.2",

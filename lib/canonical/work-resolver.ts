@@ -16,6 +16,7 @@ import {
   resolveCanonicalByProviderWorkId,
 } from "@/lib/canonical/resolver";
 import type { NormalizedSearchBook } from "@/lib/providers/types";
+import { normalizeSearchText } from "@/lib/canonical/constants";
 
 export type WorkResolution = {
   workKey: string;
@@ -25,14 +26,7 @@ export type WorkResolution = {
 
 /** Normalize a title string for comparison (lower-case, collapse whitespace, strip diacritics). */
 export function normalizeWorkTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // strip diacritics
-    .replace(/\s*\([^)]*\)/g, "") // strip parenthetical qualifiers like (Standard Edition), (#1)
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeSearchText(title.replace(/\s*\([^)]*#\d+[^)]*\)/g, ""));
 }
 
 /** Normalize an author name for comparison. */

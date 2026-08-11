@@ -54,8 +54,8 @@ export function rankEditionsForWork(
 
   // 1. Score each edition
   let scoredEditions: RankedEdition[] = editions.map(ed => {
-    const _normalizedIsbn13 = normalizeIsbn(ed.isbn13);
-    const _normalizedIsbn10 = normalizeIsbn(ed.isbn);
+    const _normalizedIsbn13 = normalizeIsbn(ed.isbn13, 13);
+    const _normalizedIsbn10 = normalizeIsbn(ed.isbn, 10);
     const _normalizedLanguage = normalizeLanguageCode(ed.language_code);
 
     let _score = 0;

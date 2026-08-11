@@ -34,6 +34,22 @@ model Work {
   @@index([popularityScore])
 }
 
+model DataConflict {
+  id             String   @id @default(uuid())
+  type           String
+  identifier     String
+  existingWorkId String?
+  incomingWorkId String?
+  provider       String?
+  incomingData   Json?
+  resolution     String   @default("OPEN")
+  createdAt      DateTime @default(now())
+  resolvedAt     DateTime?
+
+  @@index([type, resolution])
+  @@index([identifier])
+}
+
 model WorkTranslation {
   id          String  @id @default(uuid())
   workId      String

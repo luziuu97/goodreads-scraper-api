@@ -8,6 +8,7 @@ import {
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { getLanguageName, parseLanguageParam, toIso639_1 } from "@/lib/languages";
 
 export const revalidate = 3600;
 
@@ -47,10 +48,11 @@ export async function GET(
       );
     }
 
-    const language = req.nextUrl.searchParams.get("language");
+    const rawLanguage = req.nextUrl.searchParams.get("language");
+    const language = rawLanguage === "original" ? "original" : parseLanguageParam(rawLanguage);
     const format = req.nextUrl.searchParams.get("format");
 
-    if (language && language !== "original" && !/^[a-z]{2,3}$/i.test(language.trim())) {
+    if (rawLanguage && rawLanguage !== "original" && !language) {
       throw new Error("Invalid language parameter. Use an ISO code like en or es");
     }
     if (
@@ -69,7 +71,7 @@ export async function GET(
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100)
       : 50;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 100)) {
       return NextResponse.json(
         {
           success: false,
@@ -109,7 +111,7 @@ export async function GET(
             const languageMatches =
               !requestedLanguage ||
               requestedLanguage === "original" ||
-              edition.language?.toLowerCase() === requestedLanguage;
+              toIso639_1(edition.language) === requestedLanguage;
             const formatMatches =
               !requestedFormat ||
               edition.format === requestedFormat ||
@@ -122,14 +124,14 @@ export async function GET(
             const cover =
               edition.covers.find((item) => item.isDefault) || edition.covers[0];
             return {
-              editionId: index + 1,
+              editionId: edition.id,
               title: edition.title,
               format: edition.format.toLowerCase(),
               formatLabel: edition.format,
               editionFormat: edition.format,
               readingFormat: null,
-              language: edition.language,
-              languageCode: edition.language,
+              language: toIso639_1(edition.language) || "und",
+              languageCode: toIso639_1(edition.language) || "und",
               country: null,
               countryCode: null,
               isbn: edition.isbn13,
@@ -150,13 +152,13 @@ export async function GET(
           formats,
           filters: {
             language: requestedLanguage,
-            resolvedLanguage: requestedLanguage === "original" ? localWork.originalLanguage : requestedLanguage,
-            originalLanguage: localWork.originalLanguage,
+            resolvedLanguage: requestedLanguage === "original" ? toIso639_1(localWork.originalLanguage) : requestedLanguage,
+            originalLanguage: toIso639_1(localWork.originalLanguage) || "und",
             format: requestedFormat?.toLowerCase() || null,
           },
-          availableLanguages: Array.from(new Set(localWork.editions.map((edition) => edition.language)))
+          availableLanguages: Array.from(new Set(localWork.editions.map((edition) => toIso639_1(edition.language)).filter(Boolean)))
             .sort()
-            .map((code) => ({ code, name: code })),
+            .map((code) => ({ code, name: getLanguageName(code) || code })),
           availableFormats: Array.from(new Set(localWork.editions.map((edition) => edition.format.toLowerCase()))).sort(),
           totalEditions: localWork.editions.length,
           totalMatched: formats.length,
