@@ -1365,6 +1365,7 @@ export async function searchHardcoverBooks(input: {
     effectiveType === "isbn" ? normalizeIsbnQuery(input.query) : input.query;
 
   const languagePref = toIso639_1(input.language);
+  const presentationLanguage = languagePref || "en";
 
   if (effectiveType === "isbn") {
     const result = await searchHardcoverBooksByIsbn(effectiveQuery, input.limit);
@@ -1474,7 +1475,7 @@ export async function searchHardcoverBooks(input: {
   );
 
   const enrichedBooks = shouldEnrichEditions
-    ? await enrichSearchHitsWithEditions(rankedBooks, effectiveQuery, languagePref)
+    ? await enrichSearchHitsWithEditions(rankedBooks, effectiveQuery, presentationLanguage)
     : rankedBooks;
   const books = (languagePref
     ? enrichedBooks.filter(

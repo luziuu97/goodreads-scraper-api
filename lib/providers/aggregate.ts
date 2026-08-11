@@ -20,7 +20,7 @@ import type {
   SeriesDetailsInput,
   SeriesSearchInput,
 } from "@/lib/providers/types";
-import { isGoodreadsCoverUrl, isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, pickBestCoverUrl, selectBestCover, normalizeLanguage, roundRating } from "@/lib/canonical/constants";
+import { isGoodreadsCoverUrl, isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, normalizeSearchText, pickBestCoverUrl, selectBestCover, normalizeLanguage, roundRating } from "@/lib/canonical/constants";
 import { getImageDimensions } from "@/lib/utils/image-size";
 import { toIso639_1 } from "@/lib/languages";
 
@@ -394,6 +394,22 @@ function isLocalWorkComplete(book: NormalizedSearchBook): boolean {
   return false;
 }
 
+function hasSuspiciousForeignPresentation(
+  book: NormalizedSearchBook,
+  query: string
+): boolean {
+  const selectedLanguage = toIso639_1(book.languageCode || book.language);
+  if (!selectedLanguage || selectedLanguage === "en") return false;
+
+  const queryMatchesWork =
+    normalizeSearchText(query) === normalizeSearchText(book.workTitle || book.title);
+  const hasEnglishEdition = (book.editions || []).some(
+    (edition) => toIso639_1(edition.language) === "en"
+  );
+
+  return queryMatchesWork && !hasEnglishEdition;
+}
+
 export async function searchAggregate(
   input: BookSearchInput
 ): Promise<NormalizedSearchResponse> {
@@ -410,17 +426,26 @@ export async function searchAggregate(
             toIso639_1(book.languageCode || book.language) === targetLanguage
         )
       : localBooks;
+    const usableLocalBooks = targetLanguage
+      ? matchingLocalBooks
+      : matchingLocalBooks.filter(
+          (book) => !hasSuspiciousForeignPresentation(book, input.query)
+        );
+    const rejectedIncompletePresentation =
+      usableLocalBooks.length !== matchingLocalBooks.length;
+    localBooks = usableLocalBooks;
     // Only short-circuit if every returned work looks sufficiently populated.
-    const allComplete = matchingLocalBooks.length > 0 &&
-      matchingLocalBooks.every(isLocalWorkComplete);
+    const allComplete = !rejectedIncompletePresentation &&
+      usableLocalBooks.length > 0 &&
+      usableLocalBooks.every(isLocalWorkComplete);
     if (allComplete) {
       return {
         success: true,
         provider: "aggregate",
         results: {
           query: input.query,
-          totalResults: matchingLocalBooks.length,
-          books: matchingLocalBooks,
+          totalResults: usableLocalBooks.length,
+          books: usableLocalBooks,
         },
       };
     }
@@ -561,6 +586,10 @@ export async function searchAggregate(
       isbn10: b.isbn10 || b.edition?.isbn10,
       isbn13: b.isbn || b.edition?.isbn,
       asin: b.edition?.asin,
+      providerEditionId: b.edition?.id ? String(b.edition.id) : undefined,
+      publisher: b.edition?.publisher,
+      pages: b.edition?.pages || undefined,
+      format: b.edition?.format,
       coverUrl: b.cover || b.edition?.cover,
       rating: b.rating,
       genres: b.genres,

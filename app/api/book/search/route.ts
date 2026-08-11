@@ -96,6 +96,7 @@ export async function GET(req: NextRequest) {
 
     const cacheKey = buildLogicalCacheKey("search_books", {
       coverSelection: "prefer-external-v2",
+      editionSelection: "language-ranked-v1",
       provider,
       type,
       limit,

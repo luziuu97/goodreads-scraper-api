@@ -562,6 +562,26 @@ export async function upsertCanonicalWorkFromProvider(
       editionId = newEd.id;
     }
 
+    // The first observed edition used to remain the default forever. Promote a
+    // later English edition over a foreign default so read-through ingestion can
+    // repair earlier provider-order accidents deterministically.
+    if (editionId && langCode === "en") {
+      const currentDefault = await prisma.edition.findFirst({
+        where: { workId, isDefault: true },
+        select: { id: true, language: true },
+      });
+      if (!currentDefault || normalizeLanguageCode(currentDefault.language) !== "en") {
+        await prisma.edition.updateMany({
+          where: { workId, isDefault: true },
+          data: { isDefault: false },
+        });
+        await prisma.edition.update({
+          where: { id: editionId },
+          data: { isDefault: true },
+        });
+      }
+    }
+
     // Upsert Cover Image & Calculate Dimensions
     if (coverUrl?.trim()) {
       let finalW = coverWidth || null;

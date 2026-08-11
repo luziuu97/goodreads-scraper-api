@@ -8,6 +8,7 @@ import type {
   NormalizedSeriesDetailsResponse,
   SeriesDetailsInput,
 } from "@/lib/providers/types";
+import { rankEditionsForPresentation } from "@/lib/canonical/edition-selection";
 
 const workInclude = {
   contributors: { include: { author: true }, orderBy: { position: "asc" as const } },
@@ -67,41 +68,11 @@ function preferredEdition(work: any, language?: string, isbn?: string | null, qu
     if (match) return match;
   }
 
-  if (language) {
-    const target = toIso639_1(language);
-    const match = work.editions.find((edition: any) => toIso639_1(edition.language) === target);
-    if (match) return match;
-  }
-
-  if (query && query.trim()) {
-    const normQuery = cleanTitleForMatch(query);
-
-    if (normQuery.length >= 3) {
-      const matches = work.editions.filter((edition: any) => {
-        if (!edition.title) return false;
-        const normTitle = cleanTitleForMatch(edition.title);
-        return normTitle.length >= 3 && (normTitle.includes(normQuery) || (normQuery.length >= 5 && normQuery.includes(normTitle)));
-      });
-      if (matches.length > 0) {
-        const targetLang = work.originalLanguage || "en";
-        const bestMatch =
-          matches.find((e: any) => e.language === targetLang || e.language === "en") ||
-          matches.find((e: any) => e.isDefault) ||
-          matches[0];
-        return bestMatch;
-      }
-    }
-  }
-
-  if (work.originalLanguage) {
-    const origMatch = work.editions.find((edition: any) => edition.language === work.originalLanguage);
-    if (origMatch) return origMatch;
-  }
-
-  return (
-    work.editions.find((edition: any) => edition.isDefault) ||
-    work.editions[0]
-  );
+  return rankEditionsForPresentation(work.editions || [], {
+    requestedLanguage: language,
+    originalLanguage: work.originalLanguage,
+    query,
+  })[0];
 }
 
 function detectQueryLanguageMatch(work: any, query?: string): string | undefined {

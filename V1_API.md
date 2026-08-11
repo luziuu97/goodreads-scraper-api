@@ -71,7 +71,7 @@ Searches by title, author, ISBN, or translated edition title.
 | --- | --- | --- | --- | --- | --- |
 | Query | `query` | string | Yes | — | Title, author, ISBN, or combined search text. |
 | Query | `type` | string | No | `all` | One of `all`, `title`, `author`, or `isbn`. |
-| Query | `language` | string | No | — | ISO language code such as `en` or `es`. Results must have an edition in this language, which is used for presentation metadata. |
+| Query | `language` | string | No | English presentation preference | ISO language code such as `en` or `es`. When supplied, results must have an edition in this language. When omitted, translated-title matches are preserved and otherwise an English edition is preferred when available. |
 | Query | `provider` | string | No | `aggregate` | Provider mode described above. |
 | Query | `limit` | integer | No | `10` | Number of results, from 1 to 50. |
 
