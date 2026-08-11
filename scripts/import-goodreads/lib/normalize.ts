@@ -88,6 +88,18 @@ export function normalizeTitle(raw: string | null | undefined): string {
   return raw.trim().replace(/\s+/g, ' ');
 }
 
+/** Pick a canonical display title without manufacturing a placeholder. */
+export function resolveCanonicalWorkTitle(
+  originalTitle: string | null | undefined,
+  fallbackEditionTitle: string | null | undefined
+): string | null {
+  const original = normalizeTitle(originalTitle);
+  if (original && original.toLowerCase() !== 'unknown title') return original;
+  const fallback = normalizeTitle(fallbackEditionTitle);
+  if (fallback && fallback.toLowerCase() !== 'unknown title') return fallback;
+  return null;
+}
+
 /**
  * Produce a lowercase, diacritics-stripped, whitespace-collapsed title key for dedup
  */

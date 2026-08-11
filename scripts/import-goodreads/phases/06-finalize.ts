@@ -12,6 +12,7 @@ import {
   normalizePublicationDate, 
   normalizedTitleKey,
   normalizeTitle,
+  resolveCanonicalWorkTitle,
   normalizeContributorRole,
   safeInt 
 } from '../lib/normalize';
@@ -106,12 +107,21 @@ export async function phase06Finalize(
     const usedWorkSlugs = new Set(existingWorkSlugsRes.rows.map(r => r.slug));
 
     const newWorksRes = await client.query(`
-      SELECT work_id, original_title, original_language_id, original_publication_year,
-             ratings_sum, ratings_count, text_reviews_count, reviews_count, popularity_score
-      FROM _import_works
+      SELECT iw.work_id, iw.original_title, iw.original_language_id, iw.original_publication_year,
+             iw.ratings_sum, iw.ratings_count, iw.text_reviews_count, iw.reviews_count, iw.popularity_score,
+             fallback.title AS fallback_title,
+             fallback.language_code AS fallback_language
+      FROM _import_works iw
+      LEFT JOIN LATERAL (
+        SELECT ie.title, ie.language_code
+        FROM _import_editions ie
+        WHERE ie.work_id = iw.work_id AND NULLIF(TRIM(ie.title), '') IS NOT NULL
+        ORDER BY ie.is_default DESC, ie.ratings_count DESC, ie.book_id
+        LIMIT 1
+      ) fallback ON TRUE
       WHERE NOT EXISTS (
         SELECT 1 FROM "WorkExternalId"
-        WHERE "externalId" = work_id::text AND provider = 'goodreads-dataset'
+        WHERE "externalId" = iw.work_id::text AND provider = 'goodreads-dataset'
       )
     `);
 
@@ -120,13 +130,17 @@ export async function phase06Finalize(
       const workExtRows: any[][] = [];
       for (const row of newWorksRes.rows) {
         const id = crypto.randomUUID();
-        const title = row.original_title || 'Unknown Title';
+        const title = resolveCanonicalWorkTitle(row.original_title, row.fallback_title);
+        if (!title) {
+          logger.warn(`Skipping Goodreads work ${row.work_id}: no usable work or edition title`);
+          continue;
+        }
         const slug = makeUniqueSlug(title, String(row.work_id), usedWorkSlugs);
         
         const rc = safeInt(row.ratings_count) || 0;
         const rs = safeInt(row.ratings_sum) || 0;
         const avgRating = rc > 0 ? rs / rc : 0;
-        const lang = normalizeLanguageCode(row.original_language_id) || null;
+        const lang = normalizeLanguageCode(row.original_language_id || row.fallback_language) || null;
         const pubYear = safeInt(row.original_publication_year) || null;
         
         const now = new Date();
@@ -149,6 +163,62 @@ export async function phase06Finalize(
         throw new Error(`Work insert conflict: expected ${workRows.length}, inserted ${worksInserted} works and ${workIdsInserted} external IDs`);
       }
       logger.info(`Inserted ${workRows.length} works`);
+    }
+
+    // Repair prior imports where a missing work-level original_title produced
+    // the placeholder even though a retained edition had a usable title.
+    const unknownWorksRes = await client.query(`
+      SELECT w.id, we."externalId" AS work_id, fallback.title, fallback.language_code
+      FROM "Work" w
+      JOIN "WorkExternalId" we
+        ON we."workId" = w.id AND we.provider = 'goodreads-dataset'
+      JOIN LATERAL (
+        SELECT ie.title, ie.language_code
+        FROM _import_editions ie
+        WHERE ie.work_id = we."externalId"::bigint
+          AND NULLIF(TRIM(ie.title), '') IS NOT NULL
+          AND LOWER(TRIM(ie.title)) <> 'unknown title'
+        ORDER BY ie.is_default DESC, ie.ratings_count DESC, ie.book_id
+        LIMIT 1
+      ) fallback ON TRUE
+      WHERE LOWER(TRIM(w."canonicalTitle")) = 'unknown title'
+    `);
+
+    if (unknownWorksRes.rows.length > 0) {
+      const repairRows: any[][] = [];
+      for (const row of unknownWorksRes.rows) {
+        usedWorkSlugs.delete(`unknown-title-${row.work_id}`);
+        const title = resolveCanonicalWorkTitle(null, row.title);
+        if (!title) continue;
+        repairRows.push([
+          row.id,
+          title,
+          makeUniqueSlug(title, String(row.work_id), usedWorkSlugs),
+          normalizeLanguageCode(row.language_code),
+        ]);
+      }
+      await client.query(`
+        CREATE TEMP TABLE _repair_work_titles (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          slug TEXT NOT NULL,
+          language TEXT NOT NULL
+        ) ON COMMIT DROP
+      `);
+      await copyFromArray(client, '_repair_work_titles', ['id', 'title', 'slug', 'language'], repairRows);
+      await client.query(`
+        UPDATE "Work" w
+        SET "canonicalTitle" = r.title,
+            slug = r.slug,
+            "originalLanguage" = CASE
+              WHEN w."originalLanguage" IS NULL OR w."originalLanguage" = 'und' THEN r.language
+              ELSE w."originalLanguage"
+            END,
+            "updatedAt" = NOW()
+        FROM _repair_work_titles r
+        WHERE w.id = r.id
+      `);
+      logger.info(`Repaired ${repairRows.length} works with edition-title fallbacks`);
     }
 
     // 6.4: WorkTitles (canonical)
@@ -267,6 +337,19 @@ export async function phase06Finalize(
 
     // 6.7: WorkContributors
     logger.info('Sub-phase 6.7: WorkContributors (AUTHOR)');
+    // Provider enrichment may previously have marked an additional author as
+    // primary. Reset imported works before deterministically ranking the
+    // Goodreads author candidates below.
+    await client.query(`
+      UPDATE "WorkContributor" wc
+      SET "isPrimary" = FALSE
+      FROM "WorkExternalId" we
+      JOIN _import_works iw ON iw.work_id::text = we."externalId"
+      WHERE we."workId" = wc."workId"
+        AND we.provider = 'goodreads-dataset'
+        AND wc.role = 'AUTHOR'
+        AND wc."isPrimary" = TRUE
+    `);
     await client.query(`
       WITH candidates AS (
         SELECT DISTINCT ON (we."workId", ae."authorId")

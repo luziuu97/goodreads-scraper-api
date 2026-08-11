@@ -20,7 +20,7 @@ import type {
   SeriesDetailsInput,
   SeriesSearchInput,
 } from "@/lib/providers/types";
-import { isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, pickBestCoverUrl, selectBestCover, normalizeLanguage, roundRating } from "@/lib/canonical/constants";
+import { isGoodreadsCoverUrl, isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, pickBestCoverUrl, selectBestCover, normalizeLanguage, roundRating } from "@/lib/canonical/constants";
 import { getImageDimensions } from "@/lib/utils/image-size";
 import { toIso639_1 } from "@/lib/languages";
 
@@ -388,6 +388,7 @@ import {
  * incorrectly split work from cache while better provider evidence exists.
  */
 function isLocalWorkComplete(book: NormalizedSearchBook): boolean {
+  if (isGoodreadsCoverUrl(book.cover)) return false;
   if (book.rating != null) return true;
   if (book.isbn || book.isbn10 || book.edition?.isbn || book.edition?.isbn10) return true;
   return false;
@@ -464,7 +465,12 @@ export async function searchAggregate(
   // standalone works. Avoid their latency/quota when primary hits are complete.
   const primaryBooks = books.filter((book) => isPrimaryProvider(book.provider));
   const needsBackup = books.length > 0 && books.some(
-    (book) => !book.isbn || !book.cover || !book.publicationDate || !book.language
+    (book) =>
+      !book.isbn ||
+      !book.cover ||
+      isGoodreadsCoverUrl(book.cover) ||
+      !book.publicationDate ||
+      !book.language
   );
   let backupSettled: PromiseSettledResult<NormalizedSearchBook[]>[] = [];
   if (needsBackup) {

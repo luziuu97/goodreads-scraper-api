@@ -1,4 +1,4 @@
-import { normalizeIsbn, isPlaceholderCover, normalizeContributorRole, normalizePublicationDate, safeInt, normalizeLanguageCode, normalizeBookFormat } from '../lib/normalize';
+import { normalizeIsbn, isPlaceholderCover, normalizeContributorRole, normalizePublicationDate, safeInt, normalizeLanguageCode, normalizeBookFormat, resolveCanonicalWorkTitle } from '../lib/normalize';
 
 describe('normalizeIsbn', () => {
   test('returns null for empty string', () => {
@@ -121,6 +121,21 @@ describe('normalizePublicationDate', () => {
   });
   test('invalid year -> null', () => {
     expect(normalizePublicationDate('abc', '5', '15')).toBeNull();
+  });
+});
+
+describe('resolveCanonicalWorkTitle', () => {
+  test('prefers the work original title', () => {
+    expect(resolveCanonicalWorkTitle('Original Work', 'Edition Title')).toBe('Original Work');
+  });
+
+  test('falls back to a retained edition instead of Unknown Title', () => {
+    expect(resolveCanonicalWorkTitle('', "But Mommy, I don't know how to..."))
+      .toBe("But Mommy, I don't know how to...");
+  });
+
+  test('returns null when neither title is usable', () => {
+    expect(resolveCanonicalWorkTitle(null, 'Unknown Title')).toBeNull();
   });
 });
 

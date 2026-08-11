@@ -405,6 +405,11 @@ export function getCoverPriorityRank(urlOrProvider?: string | null): number {
   return 2;
 }
 
+/** True when a cover URL comes from Goodreads' low-resolution image CDN. */
+export function isGoodreadsCoverUrl(url?: string | null): boolean {
+  return Boolean(url?.trim()) && getCoverPriorityRank(url) === 3;
+}
+
 export function pickBestCoverUrl(
   candidates: Array<string | null | undefined>
 ): string {

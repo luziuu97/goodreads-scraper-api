@@ -200,7 +200,12 @@ export function canonicalWorkToSearchBook(
   const edition = preferredEdition(work, effectiveLang, isbn || undefined, query);
   const allCovers = buildAllCoverCandidates(work);
   const editionCoverObj = selectBestCover(edition?.covers);
-  const coverObj = editionCoverObj || selectBestCover(allCovers);
+  // The preferred edition controls presentation metadata, but its Goodreads
+  // image must not eclipse a better cover available elsewhere on the work.
+  const coverObj = selectBestCover([
+    ...(edition?.covers || []),
+    ...allCovers,
+  ]);
   const translation = effectiveLang
     ? work.translations.find((item: any) => toIso639_1(item.language) === effectiveLang || item.language === effectiveLang)
     : undefined;

@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS _import_editions (
   is_default BOOLEAN NOT NULL DEFAULT FALSE,
   edition_rank INT NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS _import_editions_work_id_rank_idx
+  ON _import_editions (work_id, is_default DESC, ratings_count DESC, book_id);
 
 -- All author-edition relationships from selected editions
 CREATE TABLE IF NOT EXISTS _import_edition_authors (
@@ -67,6 +69,8 @@ CREATE TABLE IF NOT EXISTS _import_edition_authors (
   position INT NOT NULL DEFAULT 0,
   PRIMARY KEY (book_id, author_id, role)
 );
+CREATE INDEX IF NOT EXISTS _import_edition_authors_author_id_idx
+  ON _import_edition_authors (author_id);
 
 -- Distinct author IDs needed (derived from _import_edition_authors)
 CREATE TABLE IF NOT EXISTS _import_needed_authors (
