@@ -658,11 +658,34 @@ export async function getDetailsAggregate(
         !isNonEnglishEditionRequest ||
         (localWork.contributors || []).some((c: any) => c.role === "TRANSLATOR");
 
+      // Reject ISBNDB-only cached data.  ISBNDB frequently stores language as
+      // "und" (undetermined) and occasionally embeds the author name inside the
+      // title field.  We require:
+      //   a) the matched edition has a real language code (not null / "und"),
+      //   b) the work carries a rating or has an external ID from a primary
+      //      provider (Hardcover / Goodreads) — confirming it was verified by a
+      //      high-quality source.
+      const editionForLangCheck = matchedEditionByIsbn || primaryEdition;
+      const rawEditionLang = (editionForLangCheck as any)?.language ?? null;
+      const hasKnownLanguage =
+        rawEditionLang &&
+        rawEditionLang !== "und" &&
+        toIso639_1(rawEditionLang) != null;
+
+      const PRIMARY_PROVIDER_IDS = new Set(["hardcover", "goodreads", "goodreads-dataset"]);
+      const hasRatingOrPrimaryId =
+        localWork.averageRating != null ||
+        (localWork.externalIds || []).some((eid: any) =>
+          PRIMARY_PROVIDER_IDS.has(eid.provider)
+        );
+
       const hasCompleteData =
         localWork.translations?.some((t: any) => t.description?.trim()) &&
         primaryEdition?.publisher &&
         primaryEdition?.pages &&
-        hasEditionTranslators;
+        hasEditionTranslators &&
+        hasKnownLanguage &&
+        hasRatingOrPrimaryId;
 
       if (hasCompleteData) {
         return canonicalWorkToDetails(localWork, input.language, input.slug);
@@ -682,10 +705,35 @@ export async function getDetailsAggregate(
     .map((res, idx) => ({ res, provider: primaryProviders[idx] }))
     .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof primaryProviders)[number] } => item.res.status === "fulfilled");
 
-  const needsBackup = primaryFulfilled.length > 0 && primaryFulfilled.some(({ res }) => {
-    const book: any = res.value.book || {};
-    return !book.description || !book.publisher || !book.pages || !(book.isbn || book.isbn13 || book.edition?.isbn);
-  });
+  // Detect the edition's target language BEFORE deciding whether to call
+  // backup providers.  When no explicit ?language= is given we infer it from
+  // the first primary response so that:
+  //   a) Pass A (native-language description search) actually runs, and
+  //   b) backup providers (ISBNDB, OpenLibrary) are included in that search
+  //      for non-English editions where they sometimes carry native synopses.
+  const firstPrimaryBook: any =
+    primaryFulfilled.length > 0
+      ? (primaryFulfilled[0].res.value.book || {})
+      : {};
+  const targetIso: string | null = input.language
+    ? (toIso639_1(input.language) ?? null)
+    : (toIso639_1(
+        firstPrimaryBook.language ||
+        firstPrimaryBook.languageCode ||
+        firstPrimaryBook.edition?.language ||
+        ""
+      ) ?? null);
+  // For non-English editions, always call backup providers so Pass A can
+  // search ISBNDB / OpenLibrary responses for a native-language description.
+  // Without this, needsBackup is false whenever Hardcover returns a complete
+  // (English) record, and those providers are never queried.
+  const needsBackup =
+    (targetIso !== null && targetIso !== "en") ||
+    (primaryFulfilled.length > 0 &&
+      primaryFulfilled.some(({ res }) => {
+        const book: any = res.value.book || {};
+        return !book.description || !book.publisher || !book.pages || !(book.isbn || book.isbn13 || book.edition?.isbn);
+      }));
   const backupSettled = needsBackup
     ? await Promise.allSettled(backupProviders.map((p) => p.getDetails(input)))
     : [];
@@ -713,14 +761,17 @@ export async function getDetailsAggregate(
   const mergedBook: Record<string, unknown> = { ...primaryBook };
 
   // 1. Description / Synopsis: Multi-vendor resolution with language prioritization & fallback
-  const targetIso = input.language ? toIso639_1(input.language) : null;
+  // targetIso was computed early (before the backup-provider decision) so it
+  // could drive the needsBackup check.  It already incorporates the edition
+  // language auto-detection when no ?language= param was supplied.
   let description: string | null = null;
 
   // Pass A: Search for target language description across ALL fulfilled provider responses
+  // (includes backup providers like ISBNDB / OpenLibrary that were fetched for
+  // non-English editions so they can contribute native-language synopses)
   if (targetIso) {
     for (const m of fulfilled) {
       const b: any = m.res.value.book || {};
-      const bookLangIso = toIso639_1(b.language || b.languageCode || "");
       if (
         typeof b.description === "string" &&
         b.description.trim() &&
@@ -770,7 +821,19 @@ export async function getDetailsAggregate(
     }
   }
 
+  const detectedDescLang = description
+    ? (isTextInLanguage(description, "en") ? "en" : targetIso || "en")
+    : null;
+  const bookLangForFallbackCheck = targetIso || toIso639_1(primaryBook.language || primaryBook.languageCode || "") || null;
+  const descriptionIsLanguageFallback = Boolean(
+    bookLangForFallbackCheck &&
+      detectedDescLang &&
+      detectedDescLang !== bookLangForFallbackCheck
+  );
+
   mergedBook.description = description;
+  mergedBook.descriptionLanguage = detectedDescLang;
+  mergedBook.isLanguageFallback = descriptionIsLanguageFallback;
 
   // 2. Publication Date
   let publicationDate = primaryBook.publicationDate || primaryBook.publishDate;
@@ -895,6 +958,18 @@ export async function getDetailsAggregate(
           translators: normalizeTranslatorList(b.translators),
           illustrators: normalizeTranslatorList(b.illustrators),
           narrators: normalizeTranslatorList(b.narrators),
+          editions: Array.isArray(b.editions)
+            ? b.editions.map((ed: any) => ({
+                isbn10: ed.isbn10 || ed.isbn_10,
+                isbn13: ed.isbn || ed.isbn13 || ed.isbn_13,
+                asin: ed.asin,
+                title: ed.title,
+                format: ed.format || ed.edition_format,
+                language: ed.language,
+                publicationDate: ed.publicationDate || ed.release_date,
+                coverUrl: ed.cover || ed.coverUrl,
+              }))
+            : undefined,
         }).catch((err) => console.error("Canonical detail ingest error:", err));
       }
     })
@@ -903,7 +978,31 @@ export async function getDetailsAggregate(
   try {
     const freshWork = await findCanonicalWork(input.slug);
     if (freshWork) {
-      return canonicalWorkToDetails(freshWork, input.language, input.slug);
+      const result = canonicalWorkToDetails(freshWork, input.language, input.slug);
+      // Safety net: canonicalWorkToDetails may return null description when
+      // the English synopsis could not be stored in the non-English
+      // WorkTranslation row (the merger's language-validation check rejects
+      // cross-language content).  When the live provider fetch produced a
+      // description, surface it here so callers always get a synopsis.
+      if (!(result.book as any).description && mergedBook.description) {
+        const desc = mergedBook.description as string;
+        const detectedDescLang =
+          (mergedBook as any).descriptionLanguage ||
+          (isTextInLanguage(desc, "en") ? "en" : (result.book as any).language) ||
+          null;
+        const editionLang =
+          (result.book as any).languageCode ||
+          (result.book as any).language ||
+          null;
+        (result.book as any).description = desc;
+        (result.book as any).descriptionLanguage = detectedDescLang;
+        (result.book as any).isLanguageFallback = Boolean(
+          editionLang &&
+            detectedDescLang &&
+            detectedDescLang !== editionLang
+        );
+      }
+      return result;
     }
   } catch (freshErr) {
     // Continue with mergedBook if fresh lookup fails

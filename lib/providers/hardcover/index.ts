@@ -1,4 +1,5 @@
 import { getHardcoverApiToken } from "@/lib/api-config";
+import { upsertCanonicalWorkFromProvider } from "@/lib/canonical/merger";
 import {
   fetchHardcoverBookCovers,
   fetchHardcoverBookDetails,
@@ -29,7 +30,7 @@ export const hardcoverProvider: BookDataProvider = {
 
   async search(input: BookSearchInput): Promise<NormalizedSearchBook[]> {
     const results = await searchHardcoverBooks(input);
-    return results.books.map((book) => ({
+    const books = results.books.map((book) => ({
       id: book.id,
       provider: "hardcover" as const,
       title: book.title,
@@ -44,15 +45,74 @@ export const hardcoverProvider: BookDataProvider = {
       translators: book.translators,
       presentation: book.presentation,
       edition: book.edition,
+      editions: book.editions,
       isbn: book.edition?.isbn ?? undefined,
       isbn10: book.edition?.isbn10 ?? undefined,
     }));
+
+    for (const b of results.books.slice(0, 5)) {
+      upsertCanonicalWorkFromProvider({
+        provider: "hardcover",
+        providerWorkId: b.id,
+        title: b.workTitle || b.title,
+        authorName: b.author,
+        coverUrl: b.cover,
+        rating: b.rating,
+        genres: b.genres,
+        language: b.languageCode || b.language || undefined,
+        publicationDate: b.publicationDate,
+        isbn10: b.edition?.isbn10,
+        isbn13: b.edition?.isbn,
+        asin: b.edition?.asin,
+        format: b.edition?.format,
+        editions: Array.isArray(b.editions)
+          ? b.editions.map((ed: any) => ({
+              isbn10: ed.isbn10 || ed.isbn_10,
+              isbn13: ed.isbn13 || ed.isbn || ed.isbn_13,
+              asin: ed.asin,
+              format: ed.format,
+              language: ed.language,
+              publicationDate: ed.publicationDate,
+              coverUrl: ed.cover,
+            }))
+          : undefined,
+      }).catch((err) => console.warn(`[Hardcover] Canonical search upsert error for work ${b.id}:`, err));
+    }
+
+    return books;
   },
 
   async getDetails(input: BookDetailsInput): Promise<NormalizedBookDetailsResponse> {
     const details = await fetchHardcoverBookDetails(input.slug, {
       editionId: input.editionId,
     });
+
+    const b = details.book as Record<string, any>;
+    if (b && (b.id || input.slug)) {
+      upsertCanonicalWorkFromProvider({
+        provider: "hardcover",
+        providerWorkId: String(b.id || input.slug),
+        title: String(b.title || b.canonicalTitle || ""),
+        originalTitle: b.canonicalTitle || b.workTitle,
+        authorName: typeof b.author === "string" ? b.author : Array.isArray(b.author) ? b.author[0]?.name : b.author?.name,
+        description: String(b.description || ""),
+        language: String(b.language || b.languageCode || ""),
+        publicationYear: b.publicationYear,
+        publicationDate: String(b.publicationDate || b.publishDate || ""),
+        publisher: String(b.publishedBy || b.publisher || ""),
+        pages: typeof b.pages === "number" ? b.pages : undefined,
+        isbn10: b.isbn10,
+        isbn13: b.isbn,
+        asin: b.asin,
+        format: b.type || b.bookEdition || b.format,
+        coverUrl: b.coverUrl || b.cover || b.image,
+        rating: typeof b.rating === "number" ? b.rating : (typeof b.rating === "string" ? parseFloat(b.rating) || undefined : undefined),
+        ratingsCount: b.ratingsCount,
+        genres: b.genres,
+        seriesName: typeof b.series === "string" ? b.series.replace(/\s*#\d+.*$/, "") : (b.series?.name || b.seriesName),
+        seriesPosition: b.series?.position || b.seriesPosition,
+      }).catch((err) => console.warn(`[Hardcover] Canonical getDetails upsert error:`, err));
+    }
 
     return {
       success: true,

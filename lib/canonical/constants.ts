@@ -199,12 +199,50 @@ export function normalizeAuthorSlug(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
+export const IGNORED_AUTHOR_IDS = new Set<string>([
+  "c5b735e7-f062-4375-a9cf-c94d08dc3f17", // j.k. rwlynj
+  "ca677058-732b-428f-a955-9b7c60c941fc", // wyd slmyh
+]);
+
+export const IGNORED_AUTHOR_SLUGS = new Set<string>([
+  "j-k-rwlynj",
+  "wyd-slmyh",
+]);
+
+export function isIgnoredAuthor(
+  id?: string | null,
+  name?: string | null,
+  slug?: string | null
+): boolean {
+  if (id && IGNORED_AUTHOR_IDS.has(id)) return true;
+  if (slug && IGNORED_AUTHOR_SLUGS.has(slug)) return true;
+  if (name) {
+    const norm = normalizeAuthorSlug(name);
+    if (norm && IGNORED_AUTHOR_SLUGS.has(norm)) return true;
+  }
+  return false;
+}
+
+
 /**
  * Extract primary author and separate any concatenated non-author contributor names/roles.
  */
 export function parseAuthorNames(rawAuthorName?: string | null): { primaryAuthor: string | null; extraContributors: Array<{ name: string; role: string }> } {
   if (!rawAuthorName || !rawAuthorName.trim()) {
     return { primaryAuthor: null, extraContributors: [] };
+  }
+
+  // Heuristic: "Lastname, Firstname" single-author format (common in ISBNDB).
+  // If the raw string has exactly one comma and no other multi-author delimiters
+  // (&, ;, "and", "y"), reassemble it as "Firstname Lastname" so the comma
+  // is not mistaken for an author separator.
+  const hasMultiAuthorDelimiter = /[;&]|\band\b|\by\b/i.test(rawAuthorName);
+  const commaCount = (rawAuthorName.match(/,/g) || []).length;
+  if (!hasMultiAuthorDelimiter && commaCount === 1) {
+    const [last, first] = rawAuthorName.split(",").map((p) => p.trim());
+    if (last && first) {
+      rawAuthorName = `${first} ${last}`;
+    }
   }
 
   const parts = rawAuthorName.split(/[,;&]|\band\b|\by\b/i).map((p) => p.trim()).filter(Boolean);

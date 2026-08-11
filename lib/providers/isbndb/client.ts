@@ -70,14 +70,36 @@ function cleanIsbn(raw?: string | null): string | null {
 
 import { normalizeLanguage, roundRating } from "@/lib/canonical/constants";
 
+/**
+ * ISBNDB occasionally appends the author name to the title field in the form
+ * "Real Title - Lastname, Firstname" or "Real Title - Lastname F.".
+ * Strip that suffix when the authors array confirms the trailing token is
+ * actually an author name, not part of the real title.
+ */
+function sanitizeIsbndbTitle(rawTitle: string, authors: string[]): string {
+  if (!rawTitle) return rawTitle;
+  const dashIdx = rawTitle.lastIndexOf(" - ");
+  if (dashIdx === -1) return rawTitle;
+
+  const suffix = rawTitle.slice(dashIdx + 3).trim().toLowerCase();
+  const isAuthorSuffix = authors.some((a) => {
+    const norm = a.toLowerCase().replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
+    const normSuffix = suffix.replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
+    // Accept if the suffix is contained in the author name or vice-versa
+    return norm.includes(normSuffix) || normSuffix.includes(norm);
+  });
+
+  return isAuthorSuffix ? rawTitle.slice(0, dashIdx).trim() : rawTitle;
+}
+
 function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
   const isbn13 = cleanIsbn(b.isbn13 || b.isbn);
   const isbn10 = cleanIsbn(b.isbn10);
   const id = isbn13 || isbn10 || b.isbn || "unknown";
-  const title = b.title || b.title_long || "Untitled";
-  const author = Array.isArray(b.authors) && b.authors.length > 0
-    ? b.authors.join(", ")
-    : "Unknown Author";
+  const authors = Array.isArray(b.authors) ? b.authors : [];
+  const rawTitle = b.title || b.title_long || "Untitled";
+  const title = sanitizeIsbndbTitle(rawTitle, authors);
+  const author = authors.length > 0 ? authors.join(", ") : "Unknown Author";
   const cover = b.image || "";
   const pubDate = b.date_published || b.publish_date || undefined;
   const lang = normalizeLanguage(b.language);
@@ -257,10 +279,11 @@ export async function getIsbndbBookDetails(
   const isbn13 = cleanIsbn(b.isbn13 || b.isbn);
   const isbn10 = cleanIsbn(b.isbn10);
   const id = isbn13 || isbn10 || slug;
-  const title = b.title || b.title_long || slug;
-  const author = Array.isArray(b.authors) && b.authors.length > 0
-    ? b.authors.join(", ")
-    : "Unknown Author";
+  const authors = Array.isArray(b.authors) ? b.authors : [];
+  const rawTitle = b.title || b.title_long || slug;
+  const title = sanitizeIsbndbTitle(rawTitle, authors);
+  const author = authors.length > 0 ? authors.join(", ") : "Unknown Author";
+
 
   const response: NormalizedBookDetailsResponse = {
     success: true,

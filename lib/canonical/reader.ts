@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { formatAudioLength, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover, normalizeLanguage, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
+import { formatAudioLength, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover, normalizeLanguage, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
 import type {
   BookSearchInput,
   NormalizedBookDetailsResponse,
@@ -496,11 +496,13 @@ export function canonicalWorkToDetails(
     const result: any[] = [];
     for (const c of contributors) {
       const name = c.author?.name || c.name || "";
+      const id = c.author?.id || c.id || "0";
       const slug = normalizeAuthorSlug(name);
+      if (isIgnoredAuthor(id, name, slug)) continue;
       if (slug && !seen.has(slug)) {
         seen.add(slug);
         result.push({
-          id: c.author?.id || c.id || "0",
+          id,
           name,
           role: c.role || "AUTHOR",
         });
@@ -531,7 +533,12 @@ export function canonicalWorkToDetails(
       description,
       descriptionLanguage,
       requestedLanguage: targetIso,
-      isLanguageFallback: Boolean(targetIso && description && descriptionLanguage !== targetIso),
+      isLanguageFallback: Boolean(
+        (targetIso || effectiveIso) &&
+          description &&
+          descriptionLanguage &&
+          descriptionLanguage !== (targetIso || effectiveIso)
+      ),
       language: normalizeLanguage(effectiveLang),
       languageCode: normalizeLanguage(effectiveLang),
       author: authorsList[0]?.name || author?.name || "Unknown Author",

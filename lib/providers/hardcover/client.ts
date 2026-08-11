@@ -168,6 +168,14 @@ export type HardcoverNormalizedSearchBook = {
   translators?: string[];
   presentation?: "work" | "edition" | "isbn";
   edition?: HardcoverNormalizedEdition;
+  editions?: Array<{
+    isbn: string | null;
+    isbn10: string | null;
+    language: string | null;
+    format: string | null;
+    publicationDate?: string | null;
+    cover?: string;
+  }>;
 };
 
 export type HardcoverContributor = {
@@ -1212,6 +1220,22 @@ async function enrichSearchHitsWithEditions(
     const editionCover = toCoverUrl(edition.image || null);
     const { language, languageCode } = languageFromEdition(edition.language);
 
+    const editionSummaries = editions
+      .filter((ed: any) => ed.isbn_13 || ed.isbn_10 || ed.asin)
+      .slice(0, 5)
+      .map((ed: any) => {
+        const { language } = languageFromEdition(ed.language);
+        return {
+          isbn: trimToNull(ed.isbn_13) ?? null,
+          isbn10: trimToNull(ed.isbn_10) ?? null,
+          asin: trimToNull(ed.asin) ?? null,
+          language: language || null,
+          format: trimToNull(ed.edition_format)?.toLowerCase() ?? null,
+          publicationDate: trimToNull(ed.release_date) ?? null,
+          cover: toCoverUrl(ed.image || null) || undefined,
+        };
+      });
+
     return {
       ...book,
       title: presentationTitle,
@@ -1227,6 +1251,7 @@ async function enrichSearchHitsWithEditions(
           : undefined,
       presentation: "edition",
       edition: normalized,
+      editions: editionSummaries.length > 0 ? editionSummaries : undefined,
       // Authors stay work-level primary writers; don't replace with empty.
       author: book.author || authorNamesFromContributions(edition.contributions),
     };

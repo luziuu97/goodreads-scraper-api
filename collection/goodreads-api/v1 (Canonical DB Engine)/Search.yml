@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/book/search?query=pioneer winter"
+  url: "{{url}}/api/v1/book/search?query=dont let the forest in&language=es"
   params:
     - name: query
-      value: pioneer winter
+      value: dont let the forest in
       type: query
     - name: provider
       value: goodreads
@@ -25,7 +25,6 @@ http:
     - name: language
       value: es
       type: query
-      disabled: true
   auth: inherit
 
 settings:

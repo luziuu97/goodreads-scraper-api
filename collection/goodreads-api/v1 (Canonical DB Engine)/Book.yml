@@ -20,7 +20,7 @@ http:
       type: query
       disabled: true
     - name: bookId
-      value: "9781419773129"
+      value: "9786313003587"
       type: path
   auth: inherit
 

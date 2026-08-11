@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import {
   detectImageFormat,
   getCoverPriorityRank,
+  isIgnoredAuthor,
   isTextInLanguage,
   normalizeAuthorSlug,
   normalizeBookFormat,
@@ -45,10 +46,23 @@ export type RawProviderBookInput = {
   illustrators?: Array<{ name: string }>;
   narrators?: Array<{ name: string }>;
   audioLengthMinutes?: number | null;
+  editions?: Array<{
+    isbn10?: string | null;
+    isbn13?: string | null;
+    asin?: string | null;
+    title?: string | null;
+    format?: string | null;
+    language?: string | null;
+    publisher?: string | null;
+    publicationDate?: string | null;
+    pages?: number | null;
+    coverUrl?: string | null;
+  }>;
 };
 
 async function safeUpsertAuthor(name: string, rawSlug?: string) {
   const normSlug = normalizeAuthorSlug(name) || rawSlug || name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  if (isIgnoredAuthor(null, name, normSlug)) return null;
   const existing = await prisma.author.findUnique({ where: { slug: normSlug } });
   if (existing) return existing;
   try {
@@ -174,7 +188,7 @@ export async function upsertCanonicalWorkFromProvider(
   let authorId: string | null = null;
   if (effectiveAuthorName) {
     const author = await safeUpsertAuthor(effectiveAuthorName);
-    authorId = author.id;
+    if (author) authorId = author.id;
   }
 
   // 2. Resolve or Create Series. Membership is attached after resolving the work.
@@ -231,6 +245,8 @@ export async function upsertCanonicalWorkFromProvider(
         work: {
           include: {
             titles: true,
+            translations: true,
+            editions: { select: { title: true } },
             contributors: { include: { author: true } },
           },
         },
@@ -241,6 +257,8 @@ export async function upsertCanonicalWorkFromProvider(
       const knownTitles = [
         edition.work.canonicalTitle,
         ...edition.work.titles.map((item) => item.title),
+        ...edition.work.translations.map((item) => item.title),
+        ...edition.work.editions.map((item) => item.title),
       ].map(normalizeSearchText);
       const titleAgrees = knownTitles.some(
         (known) => known === incomingTitle || known.includes(incomingTitle) || incomingTitle.includes(known)
@@ -383,11 +401,13 @@ export async function upsertCanonicalWorkFromProvider(
     for (const extra of parsedExtras) {
       if (extra?.name?.trim()) {
         const extraAuthor = await safeUpsertAuthor(extra.name.trim());
-        await prisma.workContributor.upsert({
-          where: { workId_authorId_role: { workId, authorId: extraAuthor.id, role: extra.role || "AUTHOR" } },
-          update: {},
-          create: { workId, authorId: extraAuthor.id, role: extra.role || "AUTHOR", isPrimary: false, position: 1 },
-        });
+        if (extraAuthor) {
+          await prisma.workContributor.upsert({
+            where: { workId_authorId_role: { workId, authorId: extraAuthor.id, role: extra.role || "AUTHOR" } },
+            update: {},
+            create: { workId, authorId: extraAuthor.id, role: extra.role || "AUTHOR", isPrimary: false, position: 1 },
+          });
+        }
       }
     }
   }
@@ -397,11 +417,13 @@ export async function upsertCanonicalWorkFromProvider(
       if (t?.name?.trim()) {
         const tSlug = t.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
         const tAuthor = await safeUpsertAuthor(t.name.trim(), tSlug);
-        await prisma.workContributor.upsert({
-          where: { workId_authorId_role: { workId, authorId: tAuthor.id, role: "TRANSLATOR" } },
-          update: {},
-          create: { workId, authorId: tAuthor.id, role: "TRANSLATOR", isPrimary: false, position: 1 },
-        });
+        if (tAuthor) {
+          await prisma.workContributor.upsert({
+            where: { workId_authorId_role: { workId, authorId: tAuthor.id, role: "TRANSLATOR" } },
+            update: {},
+            create: { workId, authorId: tAuthor.id, role: "TRANSLATOR", isPrimary: false, position: 1 },
+          });
+        }
       }
     }
   }
@@ -411,11 +433,13 @@ export async function upsertCanonicalWorkFromProvider(
       if (ill?.name?.trim()) {
         const illSlug = ill.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
         const illAuthor = await safeUpsertAuthor(ill.name.trim(), illSlug);
-        await prisma.workContributor.upsert({
-          where: { workId_authorId_role: { workId, authorId: illAuthor.id, role: "ILLUSTRATOR" } },
-          update: {},
-          create: { workId, authorId: illAuthor.id, role: "ILLUSTRATOR", isPrimary: false, position: 2 },
-        });
+        if (illAuthor) {
+          await prisma.workContributor.upsert({
+            where: { workId_authorId_role: { workId, authorId: illAuthor.id, role: "ILLUSTRATOR" } },
+            update: {},
+            create: { workId, authorId: illAuthor.id, role: "ILLUSTRATOR", isPrimary: false, position: 2 },
+          });
+        }
       }
     }
   }
@@ -425,11 +449,13 @@ export async function upsertCanonicalWorkFromProvider(
       if (nar?.name?.trim()) {
         const narSlug = nar.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
         const narAuthor = await safeUpsertAuthor(nar.name.trim(), narSlug);
-        await prisma.workContributor.upsert({
-          where: { workId_authorId_role: { workId, authorId: narAuthor.id, role: "NARRATOR" } },
-          update: {},
-          create: { workId, authorId: narAuthor.id, role: "NARRATOR", isPrimary: false, position: 3 },
-        });
+        if (narAuthor) {
+          await prisma.workContributor.upsert({
+            where: { workId_authorId_role: { workId, authorId: narAuthor.id, role: "NARRATOR" } },
+            update: {},
+            create: { workId, authorId: narAuthor.id, role: "NARRATOR", isPrimary: false, position: 3 },
+          });
+        }
       }
     }
   }
@@ -482,6 +508,35 @@ export async function upsertCanonicalWorkFromProvider(
         description: finalDesc || null,
       },
     });
+
+    // Cross-language description preservation: Hardcover (and most primary
+    // providers) always return the synopsis in English regardless of the
+    // edition language.  When we're ingesting a non-English edition, the
+    // English description would otherwise be discarded (it fails the
+    // isTextInLanguage check for the edition's langCode).  If the `en`
+    // WorkTranslation already exists for this work, backfill its description
+    // so canonicalWorkToDetails can surface it as a fallback.
+    // We only UPDATE (never CREATE) to avoid creating an `en` row with a
+    // non-English title — the English canonical row is created when the book
+    // is requested via its English slug.
+    if (
+      langCode !== "en" &&
+      description?.trim() &&
+      isTextInLanguage(description, "en")
+    ) {
+      const enTrans = await prisma.workTranslation.findUnique({
+        where: { workId_language: { workId, language: "en" } },
+      });
+      if (
+        enTrans &&
+        (!enTrans.description || !isTextInLanguage(enTrans.description, "en"))
+      ) {
+        await prisma.workTranslation.update({
+          where: { workId_language: { workId, language: "en" } },
+          data: { description: description.trim() },
+        });
+      }
+    }
 
     const normalizedTitle = normalizeSearchText(title);
     await prisma.workTitle.upsert({
@@ -598,27 +653,104 @@ export async function upsertCanonicalWorkFromProvider(
         });
       }
     }
+  }
 
-    // Upsert Cover Image & Calculate Dimensions
-    if (coverUrl?.trim()) {
-      let finalW = coverWidth || null;
-      let finalH = coverHeight || null;
-      let finalPixelCount = finalW && finalH ? finalW * finalH : null;
-      let imgFormat = detectImageFormat(coverUrl);
+  if (Array.isArray(input.editions)) {
+    for (const ed of input.editions) {
+      const edIsbn13 = normalizeValidIsbn(ed.isbn13);
+      const edIsbn10 = normalizeValidIsbn(ed.isbn10);
+      const edAsin = ed.asin?.trim() || null;
+      if (!edIsbn13 && !edIsbn10 && !edAsin) continue;
 
-      if (!finalW || !finalH) {
-        const measured = await getImageDimensions(coverUrl);
-        if (measured.width && measured.height) {
-          finalW = measured.width;
-          finalH = measured.height;
-          finalPixelCount = measured.pixelCount;
-          imgFormat = measured.format || imgFormat;
-        }
+      const edLang = normalizeLanguageCode(ed.language);
+      const edFormat = normalizeBookFormat(ed.format);
+      const edTitle = ed.title?.trim() || title.trim();
+
+      const existingEd = await prisma.edition.findFirst({
+        where: {
+          workId,
+          OR: [
+            ...(edIsbn13 ? [{ isbn13: edIsbn13 }] : []),
+            ...(edIsbn10 ? [{ isbn10: edIsbn10 }] : []),
+            ...(edAsin ? [{ asin: edAsin }] : []),
+          ],
+        },
+      });
+
+      let subEdId: string | null = null;
+      if (existingEd) {
+        subEdId = existingEd.id;
+        await prisma.edition.update({
+          where: { id: subEdId },
+          data: {
+            publisher: ed.publisher || existingEd.publisher || undefined,
+            publicationDate: ed.publicationDate || existingEd.publicationDate || undefined,
+            pages: typeof ed.pages === "number" && ed.pages > 0 ? ed.pages : (existingEd.pages || undefined),
+            format: edFormat || existingEd.format || undefined,
+            language: edLang !== "und" ? edLang : (existingEd.language || undefined),
+            isbn10: edIsbn10 || existingEd.isbn10 || undefined,
+            isbn13: edIsbn13 || existingEd.isbn13 || undefined,
+            asin: edAsin || existingEd.asin || undefined,
+          },
+        });
+      } else {
+        const edCount = await prisma.edition.count({ where: { workId } });
+        const createdEd = await prisma.edition.create({
+          data: {
+            workId,
+            title: edTitle,
+            format: edFormat,
+            language: edLang,
+            isbn10: edIsbn10,
+            isbn13: edIsbn13,
+            asin: edAsin,
+            publisher: ed.publisher || null,
+            publicationDate: ed.publicationDate || null,
+            pages: ed.pages || null,
+            isDefault: edCount === 0,
+          },
+        });
+        subEdId = createdEd.id;
       }
 
-      const existingCover = await prisma.editionCover.findFirst({
-        where: { editionId, url: coverUrl },
-      });
+      if (subEdId && ed.coverUrl?.trim()) {
+        const existingCover = await prisma.editionCover.findFirst({
+          where: { editionId: subEdId, url: ed.coverUrl.trim() },
+        });
+        if (!existingCover) {
+          await prisma.editionCover.create({
+            data: {
+              editionId: subEdId,
+              provider,
+              url: ed.coverUrl.trim(),
+              isDefault: true,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  // Upsert Cover Image & Calculate Dimensions
+  if (editionId && coverUrl?.trim()) {
+    let finalW = coverWidth || null;
+    let finalH = coverHeight || null;
+    let finalPixelCount = finalW && finalH ? finalW * finalH : null;
+    let imgFormat = detectImageFormat(coverUrl);
+
+    if (!finalW || !finalH) {
+      const measured = await getImageDimensions(coverUrl);
+      if (measured.width && measured.height) {
+        finalW = measured.width;
+        finalH = measured.height;
+        finalPixelCount = measured.pixelCount;
+        imgFormat = measured.format || imgFormat;
+      }
+    }
+
+    const existingCover = await prisma.editionCover.findFirst({
+      where: { editionId, url: coverUrl },
+    });
 
       if (!existingCover) {
         await prisma.editionCover.create({
@@ -677,7 +809,6 @@ export async function upsertCanonicalWorkFromProvider(
         });
       }
     }
-  }
 
   // 8. External source mappings. Work and edition identities are independent.
   if (providerWorkId) {

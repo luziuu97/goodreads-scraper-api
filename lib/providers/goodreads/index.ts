@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { selectBestCover } from "@/lib/canonical/constants";
+import { isIgnoredAuthor, selectBestCover } from "@/lib/canonical/constants";
 import { canonicalWorkToSearchBook } from "@/lib/canonical/reader";
 import type {
   BookCoversInput,
@@ -214,12 +214,16 @@ export const goodreadsProvider: BookDataProvider = {
       ratingsCount: work.ratingsCount,
       reviewsCount: work.reviewsCount,
       popularityScore: work.popularityScore,
-      author: work.contributors[0]?.author?.name || "Unknown Author",
-      authors: work.contributors.map((a) => ({
-        id: a.author.id,
-        name: a.author.name,
-        role: a.role,
-      })),
+      author:
+        work.contributors.find((a) => !isIgnoredAuthor(a.author.id, a.author.name))?.author?.name ||
+        "Unknown Author",
+      authors: work.contributors
+        .filter((a) => !isIgnoredAuthor(a.author.id, a.author.name))
+        .map((a) => ({
+          id: a.author.id,
+          name: a.author.name,
+          role: a.role,
+        })),
       genres: work.genres.map((g) => g.genre.name),
       series: work.seriesMemberships.map((s) => ({
         id: s.series.id,
