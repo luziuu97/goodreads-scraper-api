@@ -185,6 +185,22 @@ export function formatAudioLength(totalSeconds?: number | null): { audioLength: 
   };
 }
 
+export function calculatePopularityScore(
+  ratingsCount?: number | null,
+  averageRating?: number | null,
+  reviewsCount?: number | null
+): number | null {
+  if (!ratingsCount || ratingsCount <= 0 || !averageRating || averageRating <= 0) {
+    return null;
+  }
+  const rCount = Math.max(0, ratingsCount);
+  const avg = Math.max(0, averageRating);
+  const revCount = Math.max(0, reviewsCount || 0);
+
+  const score = Math.log10(rCount + 1) * avg * Math.log10(revCount + 1);
+  return Number.isFinite(score) && score > 0 ? score : null;
+}
+
 /**
  * Normalize author name into a canonical slug for deduplication (e.g. "C. S. Lewis" & "C.S. Lewis" -> "c-s-lewis").
  */
@@ -195,8 +211,46 @@ export function normalizeAuthorSlug(name: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\b(translator|translation|translated by|illustrator|illustration|illustrated by|narrator|narrated by|reader|read by|reading|editor|edited by|cover artist)\b/gi, "")
     .replace(/[\(\)\[\]]/g, " ")
+    .replace(/(?<=\b[a-z])[\s\.\-]+(?=[a-z]\b)/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+export function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ndash;/g, "–")
+    .replace(/&mdash;/g, "—");
+}
+
+export function htmlToMarkdown(input: string | null | undefined): string {
+  if (!input || !input.trim()) return "";
+  let text = input.trim();
+  if (!/<[a-z][\s\S]*>/i.test(text)) {
+    return decodeHtmlEntities(text);
+  }
+
+  text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, content) => `\n\n### ${content.trim()}\n\n`);
+  text = text.replace(/<(?:b|strong)[^>]*>([\s\S]*?)<\/(?:b|strong)>/gi, "**$1**");
+  text = text.replace(/<(?:i|em)[^>]*>([\s\S]*?)<\/(?:i|em)>/gi, "*$1*");
+  text = text.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, "[$2]($1)");
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, "\n- $1");
+  text = text.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, "\n\n$1\n\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/?[^>]+(>|$)/g, "");
+  text = decodeHtmlEntities(text);
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export const IGNORED_AUTHOR_IDS = new Set<string>([

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { formatAudioLength, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover, normalizeLanguage, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
+import { formatAudioLength, htmlToMarkdown, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover, normalizeLanguage, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
 import type {
   BookSearchInput,
   NormalizedBookDetailsResponse,
@@ -484,7 +484,7 @@ export function canonicalWorkToDetails(
         byLanguage.set(code, {
           language: code,
           title: item.title,
-          description: item.description || null,
+          description: item.description ? htmlToMarkdown(item.description) : null,
         });
       }
       return byLanguage;
@@ -521,6 +521,8 @@ export function canonicalWorkToDetails(
     typeof edition?.audioLengthMinutes === "number" ? edition.audioLengthMinutes * 60 : null
   );
 
+  const finalFormattedDescription = description ? htmlToMarkdown(description) : null;
+
   return {
     success: true,
     provider: "aggregate",
@@ -530,7 +532,7 @@ export function canonicalWorkToDetails(
       slug: work.slug,
       title: displayTitle,
       canonicalTitle: work.canonicalTitle,
-      description,
+      description: finalFormattedDescription,
       descriptionLanguage,
       requestedLanguage: targetIso,
       isLanguageFallback: Boolean(

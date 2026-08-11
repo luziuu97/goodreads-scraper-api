@@ -631,8 +631,9 @@ function normalizeTranslatorList(
 export async function getDetailsAggregate(
   input: BookDetailsInput
 ): Promise<NormalizedBookDetailsResponse> {
+  let localWork: any = null;
   try {
-    const localWork = await findCanonicalWork(input.slug);
+    localWork = await findCanonicalWork(input.slug);
     if (localWork) {
       const primaryEdition = localWork.editions?.[0];
 
@@ -792,6 +793,61 @@ export async function getDetailsAggregate(
           break;
         }
       }
+    }
+  }
+
+  // Pass A2: If target language description is missing, query backup providers (ISBNDB)
+  // for sibling edition ISBNs belonging to the same Work!
+  if (!description && targetIso && targetIso !== "en") {
+    const candidateIsbns = new Set<string>();
+    const gatherIsbns = (edList: any[]) => {
+      if (!Array.isArray(edList)) return;
+      for (const ed of edList) {
+        const isbnStr = ed?.isbn13 || ed?.isbn || ed?.isbn10;
+        if (typeof isbnStr === "string" && isbnStr.trim() && isbnStr.trim() !== input.slug) {
+          candidateIsbns.add(isbnStr.trim());
+        }
+      }
+    };
+
+    if (firstPrimaryBook) {
+      gatherIsbns(firstPrimaryBook.editions);
+      if (firstPrimaryBook.matchedEdition) gatherIsbns([firstPrimaryBook.matchedEdition]);
+    }
+    if (localWork) {
+      gatherIsbns(localWork.editions);
+    }
+
+    const isbnsToQuery = Array.from(candidateIsbns).slice(0, 3);
+    for (const sibIsbn of isbnsToQuery) {
+      for (const bp of backupProviders) {
+        try {
+          const sibRes = await bp.getDetails({ slug: sibIsbn, editionId: input.editionId, language: input.language });
+          const sibBook: any = sibRes?.book || {};
+          if (
+            typeof sibBook.description === "string" &&
+            sibBook.description.trim() &&
+            isTextInLanguage(sibBook.description, targetIso)
+          ) {
+            description = sibBook.description.trim();
+            upsertCanonicalWorkFromProvider({
+              provider: bp.id,
+              providerWorkId: String(sibBook.id || sibIsbn),
+              title: String(sibBook.title || ""),
+              authorName: typeof sibBook.author === "string" ? sibBook.author : undefined,
+              description: description,
+              language: targetIso,
+              isbn13: sibBook.isbn || sibBook.isbn13,
+              isbn10: sibBook.isbn10,
+              coverUrl: sibBook.cover,
+            }).catch((err) => console.warn(`[Aggregate] Sibling backup ingest error:`, err));
+            break;
+          }
+        } catch (err) {
+          // Ignore individual sibling edition query errors
+        }
+      }
+      if (description) break;
     }
   }
 

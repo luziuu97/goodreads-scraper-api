@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/db";
 import {
+  calculatePopularityScore,
   detectImageFormat,
   getCoverPriorityRank,
+  htmlToMarkdown,
   isIgnoredAuthor,
   isTextInLanguage,
   normalizeAuthorSlug,
@@ -38,6 +40,8 @@ export type RawProviderBookInput = {
   coverHeight?: number | null;
   rating?: number | null;
   ratingsCount?: number | null;
+  reviewsCount?: number | null;
+  textReviewsCount?: number | null;
   genres?: string[];
   seriesName?: string | null;
   seriesPosition?: number | null;
@@ -268,7 +272,7 @@ export async function upsertCanonicalWorkFromProvider(
         (item) => normalizeAuthorSlug(item.author.name) === incomingAuthor
       );
 
-      if (titleAgrees && authorAgrees) {
+      if (authorAgrees) {
         existingWorkId = edition.workId;
       } else {
         const conflict = {
@@ -339,6 +343,9 @@ export async function upsertCanonicalWorkFromProvider(
 
   // 4. Create or Update Work
   let workId: string;
+  const revCount = input.reviewsCount ?? input.textReviewsCount ?? null;
+  const computedPopScore = calculatePopularityScore(ratingsCount, rating, revCount);
+
   if (existingWorkId) {
     workId = existingWorkId;
     await prisma.work.update({
@@ -347,18 +354,29 @@ export async function upsertCanonicalWorkFromProvider(
         publicationYear: publicationYear || undefined,
         averageRating: rating || undefined,
         ratingsCount: ratingsCount || undefined,
+        reviewsCount: revCount || undefined,
+        textReviewsCount: revCount || undefined,
+        popularityScore: computedPopScore || undefined,
       },
     });
   } else {
     try {
+      const workOriginalLang =
+        langCode !== "en" && isTextInLanguage(canonicalTitleStr, "en")
+          ? "en"
+          : langCode;
+
       const newWork = await prisma.work.create({
         data: {
           slug: slugStr,
           canonicalTitle: canonicalTitleStr,
-          originalLanguage: langCode,
+          originalLanguage: workOriginalLang,
           publicationYear,
           averageRating: rating,
           ratingsCount,
+          reviewsCount: revCount,
+          textReviewsCount: revCount,
+          popularityScore: computedPopScore,
         },
       });
       workId = newWork.id;
@@ -470,7 +488,8 @@ export async function upsertCanonicalWorkFromProvider(
 
   // 5. Work Translation
   if (title || description) {
-    const validLanguageDesc = isTextInLanguage(description, langCode) ? description?.trim() : undefined;
+    const rawDesc = description ? htmlToMarkdown(description) : undefined;
+    const validLanguageDesc = rawDesc && isTextInLanguage(rawDesc, langCode) ? rawDesc : undefined;
     const existingTrans = await prisma.workTranslation.findUnique({
       where: { workId_language: { workId, language: langCode } },
     });
@@ -538,19 +557,26 @@ export async function upsertCanonicalWorkFromProvider(
       }
     }
 
+    const titleLang =
+      langCode !== "en" &&
+      normalizeSearchText(title) === normalizeSearchText(canonicalTitleStr) &&
+      isTextInLanguage(canonicalTitleStr, "en")
+        ? "en"
+        : langCode;
+
     const normalizedTitle = normalizeSearchText(title);
     await prisma.workTitle.upsert({
       where: {
         workId_language_normalizedTitle: {
           workId,
-          language: langCode,
+          language: titleLang,
           normalizedTitle,
         },
       },
       update: { title: title.trim() },
       create: {
         workId,
-        language: langCode,
+        language: titleLang,
         title: title.trim(),
         normalizedTitle,
         isPrimary: title.trim() === canonicalTitleStr,
@@ -607,7 +633,7 @@ export async function upsertCanonicalWorkFromProvider(
           publicationDate: publicationDate || existingEdition.publicationDate || undefined,
           pages: typeof pages === "number" && pages > 0 ? pages : (existingEdition.pages || undefined),
           audioLengthMinutes: typeof input.audioLengthMinutes === "number" && input.audioLengthMinutes > 0 ? input.audioLengthMinutes : (existingEdition.audioLengthMinutes || undefined),
-          format: bookFormat || existingEdition.format || undefined,
+          format: bookFormat && bookFormat !== "OTHER" ? bookFormat : (existingEdition.format || undefined),
           language: langCode !== "und" ? langCode : (existingEdition.language || undefined),
           isbn10: validIsbn10 || existingEdition.isbn10 || undefined,
           isbn13: validIsbn13 || existingEdition.isbn13 || undefined,
@@ -686,7 +712,7 @@ export async function upsertCanonicalWorkFromProvider(
             publisher: ed.publisher || existingEd.publisher || undefined,
             publicationDate: ed.publicationDate || existingEd.publicationDate || undefined,
             pages: typeof ed.pages === "number" && ed.pages > 0 ? ed.pages : (existingEd.pages || undefined),
-            format: edFormat || existingEd.format || undefined,
+            format: edFormat && edFormat !== "OTHER" ? edFormat : (existingEd.format || undefined),
             language: edLang !== "und" ? edLang : (existingEd.language || undefined),
             isbn10: edIsbn10 || existingEd.isbn10 || undefined,
             isbn13: edIsbn13 || existingEd.isbn13 || undefined,

@@ -1,3 +1,4 @@
+import { htmlToMarkdown } from "@/lib/canonical/constants";
 import { isbndbLimiter } from "@/lib/outgoing-rate-limiter";
 import {
   buildLogicalCacheKey,
@@ -295,7 +296,7 @@ export async function getIsbndbBookDetails(
       workTitle: b.title_long || null,
       author,
       authors: b.authors || [],
-      description: b.synopsis || b.synopsys || b.overview || null,
+      description: htmlToMarkdown(b.synopsis || b.synopsys || b.overview) || null,
       publicationDate: b.date_published || b.publish_date || null,
       publisher: b.publisher || null,
       pages: typeof b.pages === "number" ? b.pages : null,
