@@ -56,8 +56,18 @@ async function safeUpsertAuthor(name: string, rawSlug?: string) {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      const reFound = await prisma.author.findUnique({ where: { slug: normSlug } });
-      if (reFound) return reFound;
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+        const reFound = await prisma.author.findUnique({ where: { slug: normSlug } });
+        if (reFound) return reFound;
+      }
+      const reFoundByName = await prisma.author.findFirst({ where: { name } });
+      if (reFoundByName) return reFoundByName;
+
+      const fallbackSlug = `${normSlug}-${Math.random().toString(36).slice(2, 7)}`;
+      return await prisma.author.create({
+        data: { name, slug: fallbackSlug },
+      });
     }
     throw err;
   }
@@ -74,8 +84,15 @@ async function safeUpsertSeries(name: string, slug: string) {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      const reFound = await prisma.series.findUnique({ where: { slug } });
-      if (reFound) return reFound;
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+        const reFound = await prisma.series.findUnique({ where: { slug } });
+        if (reFound) return reFound;
+      }
+      const fallbackSlug = `${slug}-${Math.random().toString(36).slice(2, 7)}`;
+      return await prisma.series.create({
+        data: { canonicalName: name, slug: fallbackSlug },
+      });
     }
     throw err;
   }
@@ -92,8 +109,11 @@ async function safeUpsertGenre(name: string) {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      const reFound = await prisma.genre.findUnique({ where: { name } });
-      if (reFound) return reFound;
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+        const reFound = await prisma.genre.findUnique({ where: { name } });
+        if (reFound) return reFound;
+      }
     }
     throw err;
   }
@@ -279,20 +299,25 @@ export async function upsertCanonicalWorkFromProvider(
       workId = newWork.id;
     } catch (err: any) {
       if (err?.code === "P2002") {
-        const suffix = (providerWorkId || providerEditionId || Date.now().toString())
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-");
-        const newWork = await prisma.work.create({
-          data: {
-            slug: `${slugStr}-${suffix}`,
-            canonicalTitle: canonicalTitleStr,
-            originalLanguage: langCode,
-            publicationYear,
-            averageRating: rating,
-            ratingsCount,
-          },
-        });
-        workId = newWork.id;
+        const reFoundWork = await prisma.work.findUnique({ where: { slug: slugStr } });
+        if (reFoundWork) {
+          workId = reFoundWork.id;
+        } else {
+          const suffix = `${providerWorkId || providerEditionId || Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-");
+          const newWork = await prisma.work.create({
+            data: {
+              slug: `${slugStr}-${suffix}`,
+              canonicalTitle: canonicalTitleStr,
+              originalLanguage: langCode,
+              publicationYear,
+              averageRating: rating,
+              ratingsCount,
+            },
+          });
+          workId = newWork.id;
+        }
       } else {
         throw err;
       }

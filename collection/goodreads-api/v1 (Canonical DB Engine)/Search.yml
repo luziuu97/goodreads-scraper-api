@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/book/search?query=harry potter"
+  url: "{{url}}/api/v1/book/search?query=wedding people"
   params:
     - name: query
-      value: harry potter
+      value: wedding people
       type: query
     - name: provider
       value: goodreads
