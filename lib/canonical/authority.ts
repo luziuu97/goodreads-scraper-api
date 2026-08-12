@@ -7,9 +7,15 @@
  *   2. Hardcover (live)
  * Backup providers (ISBNDB, Open Library) may only fill fields trusted sources
  * left empty — they must never define work identity.
+ *
+ * Description is the exception. Hardcover repeats the English work synopsis on
+ * every edition, so non-English presentations may take a matching-language
+ * synopsis from backups. Hardcover English remains the fallback.
  */
 
 import type { ProviderId } from "@/lib/providers/types";
+import { isTextInLanguage } from "@/lib/canonical/constants";
+import { toIso639_1 } from "@/lib/languages";
 
 /** Providers allowed to define work identity / structural metadata. */
 export const TRUSTED_STRUCTURAL_PROVIDERS = new Set<string>([
@@ -113,6 +119,110 @@ export function isTrustedLocalDetailsComplete(work: any): boolean {
       hasSiblingEditions &&
       seriesPositionsOk
   );
+}
+
+export function normalizeLookupIsbn(value?: string | null): string | null {
+  if (!value) return null;
+  const clean = String(value).replace(/[^0-9Xx]/g, "").toUpperCase();
+  return clean.length === 10 || clean.length === 13 ? clean : null;
+}
+
+export function findEditionByIsbn(work: any, isbn: string | null | undefined) {
+  if (!work || !isbn) return null;
+  return (
+    (work.editions || []).find((edition: any) =>
+      [edition.isbn13, edition.isbn10, edition.asin].some(
+        (value: unknown) => normalizeLookupIsbn(String(value || "")) === isbn
+      )
+    ) || null
+  );
+}
+
+export function workHasDescriptionInLanguage(
+  work: any,
+  iso: string | null | undefined
+): boolean {
+  if (!work || !iso) return false;
+  return (work.translations || []).some(
+    (translation: any) =>
+      toIso639_1(translation.language) === iso &&
+      typeof translation.description === "string" &&
+      translation.description.trim() &&
+      isTextInLanguage(translation.description, iso)
+  );
+}
+
+export function languageFromDetailsBook(book: any): string | null {
+  if (!book) return null;
+  return (
+    toIso639_1(
+      book.languageCode ||
+        book.language ||
+        book.edition?.languageCode ||
+        (typeof book.edition?.language === "string"
+          ? book.edition.language
+          : book.edition?.language?.code2) ||
+        ""
+    ) || null
+  );
+}
+
+/**
+ * Language the details synopsis should be written in.
+ * Explicit request > matched edition > backup edition > Hardcover edition > work original.
+ */
+export function resolveDetailsDescriptionLanguage(options: {
+  requestedLanguage?: string | null;
+  matchedEditionLanguage?: string | null;
+  backupBookLanguages?: Array<string | null | undefined>;
+  hardcoverLanguage?: string | null;
+  originalLanguage?: string | null;
+}): string | null {
+  const first = (value?: string | null) =>
+    value ? toIso639_1(value) || null : null;
+  return (
+    first(options.requestedLanguage) ||
+    first(options.matchedEditionLanguage) ||
+    options.backupBookLanguages?.map((value) => first(value || null)).find(Boolean) ||
+    first(options.hardcoverLanguage) ||
+    first(options.originalLanguage) ||
+    null
+  );
+}
+
+/**
+ * Whether details must consult backups for a translated synopsis.
+ * English presentations stay on Hardcover. Unknown ISBN language is checked
+ * because Hardcover will not tell us the edition is translated.
+ */
+export function needsLocalizedDescriptionLookup(
+  work: any,
+  descriptionLanguage: string | null,
+  slugIsIsbn: boolean
+): boolean {
+  if (descriptionLanguage && descriptionLanguage !== "en") {
+    return !workHasDescriptionInLanguage(work, descriptionLanguage);
+  }
+  if (slugIsIsbn && !descriptionLanguage) return true;
+  return false;
+}
+
+export function siblingIsbnsForLanguage(
+  work: any,
+  iso: string | null,
+  requestedIsbn?: string | null,
+  limit = 3
+): string[] {
+  if (!work || !iso) return requestedIsbn ? [requestedIsbn] : [];
+  const isbns: string[] = [];
+  if (requestedIsbn) isbns.push(requestedIsbn);
+  for (const edition of work.editions || []) {
+    if (toIso639_1(edition.language) !== iso) continue;
+    const isbn = normalizeLookupIsbn(edition.isbn13) || normalizeLookupIsbn(edition.isbn10);
+    if (isbn && !isbns.includes(isbn)) isbns.push(isbn);
+    if (isbns.length >= limit) break;
+  }
+  return isbns.slice(0, limit);
 }
 
 /**

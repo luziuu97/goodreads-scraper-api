@@ -5,12 +5,19 @@ import {
 } from "@/lib/providers/registry";
 import {
   extractPrimaryAuthorName,
+  findEditionByIsbn,
   isBackupProvider,
   isLiveStructuralProvider,
   isTrustedLocalDetailsComplete,
   isTrustedLocalSearchComplete,
   isTrustedStructuralProvider,
+  languageFromDetailsBook,
+  needsLocalizedDescriptionLookup,
+  normalizeLookupIsbn,
   parseSeriesLabel,
+  resolveDetailsDescriptionLanguage,
+  siblingIsbnsForLanguage,
+  workHasDescriptionInLanguage,
 } from "@/lib/canonical/authority";
 import { resolveWorkKeys } from "@/lib/canonical/work-resolver";
 import type {
@@ -975,24 +982,85 @@ async function ingestDetailsBook(
   });
 }
 
+function extractMatchingDescription(book: any, targetIso: string | null): string | null {
+  if (!book) return null;
+  const texts: string[] = [];
+  if (typeof book.description === "string" && book.description.trim()) {
+    texts.push(book.description.trim());
+  }
+  if (Array.isArray(book.translations)) {
+    for (const translation of book.translations) {
+      if (typeof translation?.description === "string" && translation.description.trim()) {
+        texts.push(translation.description.trim());
+      }
+    }
+  }
+  for (const text of texts) {
+    if (!targetIso || isTextInLanguage(text, targetIso)) return text;
+  }
+  return null;
+}
+
+function pickDetailsDescription(
+  targetIso: string | null,
+  hardcoverBook: any,
+  backupBooks: Array<{ book: any; providerId: string }>,
+  localWork: any
+): string | null {
+  const canonicalCandidate = localWork
+    ? {
+        book: {
+          description: localWork.translations?.find((t: any) => t.description)?.description,
+          translations: localWork.translations,
+        },
+        providerId: "canonical",
+      }
+    : null;
+  const hardcoverCandidate = hardcoverBook
+    ? { book: hardcoverBook, providerId: "hardcover" }
+    : null;
+
+  const localizedOrder =
+    targetIso && targetIso !== "en"
+      ? [...backupBooks, canonicalCandidate, hardcoverCandidate]
+      : [hardcoverCandidate, ...backupBooks, canonicalCandidate];
+
+  for (const candidate of localizedOrder) {
+    const match = extractMatchingDescription(candidate?.book, targetIso);
+    if (match) {
+      const cleaned = stripAlternateCoverNotes(match);
+      if (cleaned.trim()) return cleaned.trim();
+    }
+  }
+
+  // Hardcover English (or any remaining text) is the fallback.
+  for (const candidate of [hardcoverCandidate, ...backupBooks, canonicalCandidate]) {
+    const text =
+      typeof candidate?.book?.description === "string"
+        ? candidate.book.description.trim()
+        : "";
+    if (text) {
+      const cleaned = stripAlternateCoverNotes(text);
+      if (cleaned.trim()) return cleaned.trim();
+    }
+  }
+  return null;
+}
+
 export async function getDetailsAggregate(
   input: BookDetailsInput
 ): Promise<NormalizedBookDetailsResponse> {
+  const requestedIsbn = normalizeLookupIsbn(input.slug);
   let localWork: any = null;
   try {
     localWork = await findCanonicalWork(input.slug);
     if (localWork) {
-      // Non-English ISBN requests still need translator data before short-circuit.
-      const requestedIsbn = (() => {
-        const v = input.slug.trim();
-        const clean = v.replace(/[^0-9Xx]/g, "").toUpperCase();
-        return clean.length === 10 || clean.length === 13 ? clean : null;
-      })();
-      const matchedEditionByIsbn = requestedIsbn
-        ? (localWork.editions || []).find((ed: any) =>
-            [ed.isbn13, ed.isbn10, ed.asin].includes(requestedIsbn)
-          )
-        : null;
+      const matchedEditionByIsbn = findEditionByIsbn(localWork, requestedIsbn);
+      const descriptionLanguage = resolveDetailsDescriptionLanguage({
+        requestedLanguage: input.language,
+        matchedEditionLanguage: matchedEditionByIsbn?.language,
+        originalLanguage: localWork.originalLanguage,
+      });
       const isNonEnglishEditionRequest =
         matchedEditionByIsbn &&
         toIso639_1((matchedEditionByIsbn as any).language) !== "en";
@@ -1001,8 +1069,16 @@ export async function getDetailsAggregate(
         (localWork.contributors || []).some((c: any) => c.role === "TRANSLATOR");
 
       // Only short-circuit trusted, complete local rows (Hardcover / Goodreads
-      // dataset). ISBNDB-only poison never wins over a live Hardcover fetch.
-      if (isTrustedLocalDetailsComplete(localWork) && hasEditionTranslators) {
+      // dataset). Missing translated synopses still go to backups.
+      if (
+        isTrustedLocalDetailsComplete(localWork) &&
+        hasEditionTranslators &&
+        !needsLocalizedDescriptionLookup(
+          localWork,
+          descriptionLanguage,
+          Boolean(requestedIsbn)
+        )
+      ) {
         return canonicalWorkToDetails(localWork, input.language, input.slug);
       }
     }
@@ -1031,17 +1107,16 @@ export async function getDetailsAggregate(
   }
 
   const hardcoverBook: any = hardcoverResult?.book || null;
-  const targetIso: string | null = input.language
-    ? toIso639_1(input.language) ?? null
-    : toIso639_1(
-        hardcoverBook?.languageCode ||
-          hardcoverBook?.language ||
-          hardcoverBook?.edition?.language ||
-          ""
-      ) ?? null;
+  const matchedLocalEdition = findEditionByIsbn(localWork, requestedIsbn);
+  let targetIso = resolveDetailsDescriptionLanguage({
+    requestedLanguage: input.language,
+    matchedEditionLanguage: matchedLocalEdition?.language,
+    hardcoverLanguage: languageFromDetailsBook(hardcoverBook),
+    originalLanguage: localWork?.originalLanguage,
+  });
 
-  // 2) Backups only when Hardcover is missing or missing critical gap fields
-  //    (or for non-English native synopsis search).
+  // 2) Backups when Hardcover is missing fields, or when a non-English
+  //    presentation still needs a translated synopsis.
   const hardcoverMissingCritical =
     !hardcoverBook ||
     !hardcoverBook.description ||
@@ -1050,21 +1125,71 @@ export async function getDetailsAggregate(
   const needsBackup =
     !hardcoverBook ||
     hardcoverMissingCritical ||
-    (targetIso !== null && targetIso !== "en");
+    needsLocalizedDescriptionLookup(localWork, targetIso, Boolean(requestedIsbn));
 
   const backupSettled = needsBackup
     ? await Promise.allSettled(backupProviders.map((p) => p.getDetails(input)))
     : [];
-  const backupFulfilled = backupSettled
+  type BackupHit = {
+    res: PromiseFulfilledResult<NormalizedBookDetailsResponse>;
+    provider: (typeof backupProviders)[number];
+  };
+  const backupFulfilled: BackupHit[] = backupSettled
     .map((res, idx) => ({ res, provider: backupProviders[idx] }))
-    .filter(
-      (
-        item
-      ): item is {
-        res: PromiseFulfilledResult<NormalizedBookDetailsResponse>;
-        provider: (typeof backupProviders)[number];
-      } => item.res.status === "fulfilled"
+    .filter((item): item is BackupHit => item.res.status === "fulfilled");
+
+  const hasLocalizedBackup = () =>
+    Boolean(targetIso) &&
+    targetIso !== "en" &&
+    backupFulfilled.some((item) =>
+      extractMatchingDescription(item.res.value.book, targetIso)
     );
+
+  // If the requested ISBN has no translated synopsis, try other same-language
+  // editions of this work (ISBNdb stores synopsis per ISBN).
+  if (
+    needsBackup &&
+    targetIso &&
+    targetIso !== "en" &&
+    !hasLocalizedBackup() &&
+    !workHasDescriptionInLanguage(localWork, targetIso)
+  ) {
+    const extraIsbns = siblingIsbnsForLanguage(localWork, targetIso, requestedIsbn, 3).filter(
+      (isbn) => isbn !== requestedIsbn
+    );
+    for (const isbn of extraIsbns) {
+      const extraSettled = await Promise.allSettled(
+        backupProviders.map((provider) => provider.getDetails({ slug: isbn }))
+      );
+      for (let idx = 0; idx < extraSettled.length; idx++) {
+        const res = extraSettled[idx];
+        if (res.status !== "fulfilled") continue;
+        backupFulfilled.push({ res, provider: backupProviders[idx] });
+      }
+      targetIso =
+        resolveDetailsDescriptionLanguage({
+          requestedLanguage: input.language,
+          matchedEditionLanguage: matchedLocalEdition?.language,
+          backupBookLanguages: backupFulfilled.map((item) =>
+            languageFromDetailsBook(item.res.value.book)
+          ),
+          hardcoverLanguage: languageFromDetailsBook(hardcoverBook),
+          originalLanguage: localWork?.originalLanguage,
+        }) || targetIso;
+      if (hasLocalizedBackup()) break;
+    }
+  } else if (backupFulfilled.length > 0) {
+    targetIso =
+      resolveDetailsDescriptionLanguage({
+        requestedLanguage: input.language,
+        matchedEditionLanguage: matchedLocalEdition?.language,
+        backupBookLanguages: backupFulfilled.map((item) =>
+          languageFromDetailsBook(item.res.value.book)
+        ),
+        hardcoverLanguage: languageFromDetailsBook(hardcoverBook),
+        originalLanguage: localWork?.originalLanguage,
+      }) || targetIso;
+  }
 
   if (!hardcoverResult && backupFulfilled.length === 0 && !localWork) {
     throw (
@@ -1075,91 +1200,78 @@ export async function getDetailsAggregate(
     );
   }
 
-  // 3) Description: prefer target-language text, then Hardcover, then backups.
-  let description: string | null = null;
-  const descriptionCandidates: Array<{ book: any; providerId: string }> = [];
-  if (hardcoverBook) {
-    descriptionCandidates.push({ book: hardcoverBook, providerId: "hardcover" });
-  }
-  for (const item of backupFulfilled) {
-    descriptionCandidates.push({
-      book: item.res.value.book || {},
-      providerId: item.provider.id,
-    });
-  }
-  if (localWork) {
-    descriptionCandidates.push({
-      book: {
-        description: localWork.translations?.find((t: any) => t.description)?.description,
-        translations: localWork.translations,
-      },
-      providerId: "canonical",
-    });
-  }
+  // 3) Description: translated backups first, Hardcover English as fallback.
+  const backupBooks = backupFulfilled.map((item) => ({
+    book: item.res.value.book || {},
+    providerId: item.provider.id,
+  }));
+  let description = pickDetailsDescription(
+    targetIso,
+    hardcoverBook,
+    backupBooks,
+    localWork
+  );
+  const descriptionIsLocalized = Boolean(
+    description && targetIso && targetIso !== "en" && isTextInLanguage(description, targetIso)
+  );
 
-  if (targetIso) {
-    for (const { book } of descriptionCandidates) {
-      if (
-        typeof book.description === "string" &&
-        book.description.trim() &&
-        isTextInLanguage(book.description, targetIso)
-      ) {
-        description = book.description.trim();
-        break;
-      }
-      if (Array.isArray(book.translations)) {
-        const transMatch = book.translations.find(
-          (t: any) =>
-            typeof t.description === "string" &&
-            t.description.trim() &&
-            isTextInLanguage(t.description, targetIso)
-        );
-        if (transMatch) {
-          description = transMatch.description.trim();
-          break;
-        }
-      }
-    }
-  }
-  if (!description) {
-    for (const { book } of descriptionCandidates) {
-      if (typeof book.description === "string" && book.description.trim()) {
-        description = book.description.trim();
-        break;
-      }
-    }
-  }
-  if (description) {
-    description = stripAlternateCoverNotes(description);
-    if (!description.trim()) description = null;
-  }
-
-  // 4) Ingest: Hardcover structural write first (repairs poison), then gap-fill only.
+  // 4) Ingest: Hardcover structural write first (repairs poison), then gap-fill.
+  //    Do not write a translated synopsis through the Hardcover row — that
+  //    language is often English even when the edition is not.
   if (hardcoverBook) {
     try {
-      await ingestDetailsBook("hardcover", input, hardcoverBook, {
-        descriptionOverride: description,
-      });
+      await ingestDetailsBook("hardcover", input, hardcoverBook);
     } catch (err) {
       console.error("Canonical hardcover detail ingest error:", err);
     }
   }
 
+  const existingLocalizedTitle =
+    targetIso && localWork
+      ? localWork.translations?.find((t: any) => toIso639_1(t.language) === targetIso)
+          ?.title
+      : null;
+
   for (const item of backupFulfilled) {
     const b: any = item.res.value.book || {};
-    // Never let backups define identity when Hardcover already resolved the work.
+    const backupDesc =
+      typeof b.description === "string" && b.description.trim()
+        ? b.description.trim()
+        : "";
+    const backupIsLocalized = Boolean(
+      targetIso &&
+        targetIso !== "en" &&
+        backupDesc &&
+        isTextInLanguage(backupDesc, targetIso)
+    );
+
     if (hardcoverBook) {
       const needsGap =
         !(hardcoverBook.pages || hardcoverBook.edition?.pages) ||
         !(hardcoverBook.publisher || hardcoverBook.publishedBy) ||
-        !(hardcoverBook.cover || hardcoverBook.coverUrl || hardcoverBook.image) ||
-        !description;
-      if (!needsGap) continue;
+        !(hardcoverBook.cover || hardcoverBook.coverUrl || hardcoverBook.image);
+      if (!needsGap && !backupIsLocalized) continue;
       try {
-        await ingestDetailsBook(item.provider.id, input, b, {
-          gapFillOnly: true,
-          descriptionOverride: description && !hardcoverBook.description ? description : undefined,
-        });
+        await ingestDetailsBook(
+          item.provider.id,
+          input,
+          backupIsLocalized
+            ? {
+                ...b,
+                title: existingLocalizedTitle || b.title,
+                language: targetIso,
+                languageCode: targetIso,
+              }
+            : b,
+          {
+            gapFillOnly: true,
+            descriptionOverride: backupIsLocalized
+              ? backupDesc
+              : !hardcoverBook.description
+                ? description
+                : undefined,
+          }
+        );
       } catch (err) {
         console.error(`Canonical backup detail ingest error (${item.provider.id}):`, err);
       }
@@ -1292,11 +1404,18 @@ export async function getDetailsAggregate(
         }
       }
 
-      if (!book.description && description) {
+      if (
+        description &&
+        (!book.description ||
+          (descriptionIsLocalized &&
+            book.descriptionLanguage !== targetIso))
+      ) {
         book.description = description;
-        book.descriptionLanguage = isTextInLanguage(description, "en")
-          ? "en"
-          : targetIso || null;
+        book.descriptionLanguage = descriptionIsLocalized
+          ? targetIso
+          : isTextInLanguage(description, "en")
+            ? "en"
+            : targetIso || null;
         book.isLanguageFallback = Boolean(
           targetIso &&
             book.descriptionLanguage &&
