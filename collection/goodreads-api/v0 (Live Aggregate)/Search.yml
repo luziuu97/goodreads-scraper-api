@@ -3,27 +3,32 @@ info:
   type: http
   seq: 1
 
+docs: |
+  Save `isbn` + `isbn10` + `languageCode` from the hit.
+  Do not persist Hardcover `id` (e.g. 714600) as the details key.
+  `language` is a strict filter. `format` on edition is lowercase.
+
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=harry potter"
+  url: "{{url}}/api/book/search?query=fourth wing"
   params:
     - name: query
-      value: harry potter
+      value: fourth wing
       type: query
-    - name: provider
-      value: goodreads
-      type: query
-      disabled: true
     - name: type
       value: all
+      type: query
+      disabled: true
+    - name: language
+      value: es
       type: query
       disabled: true
     - name: limit
       value: "10"
       type: query
       disabled: true
-    - name: language
-      value: es
+    - name: provider
+      value: aggregate
       type: query
       disabled: true
   auth: inherit

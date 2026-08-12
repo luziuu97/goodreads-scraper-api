@@ -1,14 +1,23 @@
 info:
   name: Series Details
   type: http
-  seq: 5
+  seq: 8
+
+docs: |
+  One book per series position by default (language=original).
+  Duplicate Goodreads/Hardcover series names are collapsed; prefer the
+  Hardcover slug with a position.
 
 http:
   method: GET
   url: "{{url}}/api/series/:slug"
   params:
-    - name: provider
-      value: hardcover
+    - name: language
+      value: original
+      type: query
+      disabled: true
+    - name: format
+      value: ebook
       type: query
       disabled: true
     - name: limit
@@ -19,12 +28,8 @@ http:
       value: "0"
       type: query
       disabled: true
-    - name: language
-      value: original
-      type: query
-      disabled: true
-    - name: format
-      value: ebook
+    - name: provider
+      value: aggregate
       type: query
       disabled: true
     - name: slug

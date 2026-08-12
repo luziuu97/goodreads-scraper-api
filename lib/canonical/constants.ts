@@ -83,6 +83,11 @@ export const COMPILATION_OR_DERIVATIVE_PATTERNS: RegExp[] = [
   /\bgu[ií]a\s+de\b/i,
   /\billustrated\b/i,
   /\badaptation\b/i,
+  // Two distinct multi-word titles joined by "and" / "&" / "," — combo packs
+  // like "Fourth Wing and Iron Flame". Skip "and the/a/an" so
+  // "Harry Potter and the Philosopher's Stone" stays a novel.
+  /\b[A-Z0-9][\w'’.-]+\s+[A-Z0-9][\w'’.-]+(?:\s+[A-Z0-9][\w'’.-]+)*\s+(?:and|&)\s+(?!the\b|a\b|an\b)[A-Z0-9][\w'’.-]+\s+[A-Z0-9][\w'’.-]+/i,
+  /^[A-Z0-9][^,]{2,60},\s+(?!the\b|a\b|an\b)[A-Z0-9][^,]{2,60}$/i,
 ];
 
 /** True when the title looks like a bundle, comic issue, split volume, etc. */

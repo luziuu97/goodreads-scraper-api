@@ -3,24 +3,29 @@ info:
   type: http
   seq: 6
 
+docs: |
+  Edition / format picker. Do not read details.editions.
+  format is lowercase: ebook | hardcover | paperback | audiobook | other.
+  physical = hardcover + paperback. Build chips from availableLanguages / availableFormats.
+
 http:
   method: GET
-  url: "{{url}}/api/book/formats/:bookId"
+  url: "{{url}}/api/book/formats/:isbn"
   params:
     - name: language
       value: en
       type: query
       disabled: true
     - name: format
-      value: hardcover
+      value: ebook
       type: query
       disabled: true
     - name: limit
       value: "50"
       type: query
       disabled: true
-    - name: bookId
-      value: fourth-wing
+    - name: isbn
+      value: "9781649374042"
       type: path
   auth: inherit
 

@@ -1,0 +1,8 @@
+info:
+  name: Public API
+  type: folder
+  seq: 1
+
+docs: |
+  Recommended public requests. Leave provider unset (aggregate).
+  Persist ISBN-13 from search, then call details/covers/formats with that ISBN.

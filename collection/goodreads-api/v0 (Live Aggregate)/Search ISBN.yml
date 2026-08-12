@@ -1,0 +1,34 @@
+info:
+  name: Search ISBN
+  type: http
+  seq: 2
+
+docs: |
+  Use type=isbn when the query is an ISBN. Details key is still the ISBN,
+  even if `id` is a canonical UUID and edition.id is 0.
+
+http:
+  method: GET
+  url: "{{url}}/api/book/search?query=9781649374042&type=isbn"
+  params:
+    - name: query
+      value: "9781649374042"
+      type: query
+    - name: type
+      value: isbn
+      type: query
+    - name: language
+      value: en
+      type: query
+      disabled: true
+    - name: limit
+      value: "5"
+      type: query
+      disabled: true
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

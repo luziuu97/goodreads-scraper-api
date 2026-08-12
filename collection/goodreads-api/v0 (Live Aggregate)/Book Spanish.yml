@@ -1,0 +1,26 @@
+info:
+  name: Book Details (Spanish)
+  type: http
+  seq: 4
+
+docs: |
+  Same work, Spanish presentation. Check title, descriptionLanguage, translators,
+  matchedEdition.languageCode, and a single series with position.
+
+http:
+  method: GET
+  url: "{{url}}/api/book/details/:isbn?language=es"
+  params:
+    - name: language
+      value: es
+      type: query
+    - name: isbn
+      value: "9788496208926"
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

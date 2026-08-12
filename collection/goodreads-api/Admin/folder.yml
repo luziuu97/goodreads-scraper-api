@@ -1,0 +1,9 @@
+info:
+  name: Admin
+  type: folder
+  seq: 2
+
+docs:
+  content: |
+    CRUD under /api/admin. Same routes as /api/v1/admin. IP-restricted.
+  type: text/markdown

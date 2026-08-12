@@ -26,8 +26,7 @@ const PRODUCTION_DETAILS_BOOK_KEYS = [
   'publicationYear',
   'genres',
   'matchedEdition',
-  'editions',
-  'translations',
+  'availableLanguages',
   'series',
 ] as const;
 
@@ -71,7 +70,7 @@ const PRODUCTION_PROVIDER_MAPPING_KEYS = [
   'editionId',
 ] as const;
 
-const PRODUCTION_TRANSLATION_KEYS = ['id', 'workId', 'language', 'title', 'description'] as const;
+
 
 function expectKeys(actual: Record<string, unknown>, required: readonly string[]) {
   for (const key of required) {
@@ -195,15 +194,10 @@ describe('production response compatibility', () => {
     expect(book.matchedEdition.providerMappings.length).toBeGreaterThan(0);
     expectKeys(book.matchedEdition.providerMappings[0], PRODUCTION_PROVIDER_MAPPING_KEYS);
     expect(book.matchedEdition.providerMappings[0].providerWorkId).toBe('9780074753279');
-
-    expect(Array.isArray(book.editions)).toBe(true);
-    expectKeys(book.editions[0], PRODUCTION_EDITION_KEYS);
-    expectKeys(book.editions[0].covers[0], PRODUCTION_COVER_KEYS);
-    expectKeys(book.editions[0].providerMappings[0], PRODUCTION_PROVIDER_MAPPING_KEYS);
-
-    expect(Array.isArray(book.translations)).toBe(true);
-    expectKeys(book.translations[0], PRODUCTION_TRANSLATION_KEYS);
-    expect(book.translations[0].workId).toBe(book.id);
+    expect(book.editions).toBeUndefined();
+    expect(book.translations).toBeUndefined();
+    expect(Array.isArray(book.availableLanguages)).toBe(true);
+    expect(book.availableLanguages.some((item: { code: string }) => item.code === 'en')).toBe(true);
   });
 
   test('does not adopt live-hardcover types on the default details path', () => {

@@ -2,6 +2,15 @@ opencollection: 1.0.0
 
 info:
   name: goodreads-api
+  description: |
+    Single public contract at /api. /api/v1 is an alias, not a second engine.
+
+    App flow:
+    1. Search, then store isbn (ISBN-13) + languageCode
+    2. Details / covers / formats with that ISBN — not a Hardcover id
+    3. Details returns matchedEdition only (no editions[] / translations[])
+    4. Use /api/book/formats and /api/book/covers for the catalog
+    5. format is always lowercase: ebook | hardcover | paperback | audiobook | other
 bundled: false
 extensions:
   bruno:

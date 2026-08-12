@@ -314,7 +314,7 @@ GET /api/book/details/9780439554930
 
 - Default `book.author` is a **string**. `book.rating` is a **number**.
 - `matchedEdition` is the edition for the ISBN / language you asked for. Use it for ISBN, pages, publisher, cover, country, and `format`.
-- `editions[]` is the full catalog (often 40+). Do not render it raw — use `/api/book/formats` or `/api/book/covers` for UI.
+- Details does **not** include `editions[]` or `translations[]`. Use `/api/book/formats` and `/api/book/covers` for the catalog, and `language=` plus `availableLanguages` to switch synopsis/title.
 - `book.series[].slug` is the series-details key.
 - `requestedLanguage` / `isLanguageFallback` tell you whether the description is in the language you asked for.
 
@@ -386,7 +386,7 @@ GET /api/book/details/9780439554930
 }
 ```
 
-The live payload also includes `editions[]` (40 rows here) and `translations[]`. Use formats/covers endpoints instead of listing every edition.
+Use `/api/book/formats/{isbn}` and `/api/book/covers/{isbn}` for the edition catalog. Re-fetch details with `?language=es` when the user switches language.
 
 ### Real response — ISBN + Spanish
 

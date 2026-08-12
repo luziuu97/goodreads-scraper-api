@@ -101,8 +101,31 @@ async function safeUpsertAuthor(name: string, rawSlug?: string) {
 }
 
 async function safeUpsertSeries(name: string, slug: string) {
-  const existing = await prisma.series.findUnique({ where: { slug } });
-  if (existing) return existing;
+  const existingBySlug = await prisma.series.findUnique({ where: { slug } });
+  if (existingBySlug) return existingBySlug;
+
+  const existingByName = await prisma.series.findFirst({
+    where: { canonicalName: { equals: name, mode: "insensitive" } },
+    orderBy: { booksCount: "desc" },
+  });
+  if (existingByName) {
+    const importSuffixed = /-[0-9]{3,}$/.test(existingByName.slug);
+    if (importSuffixed && existingByName.slug !== slug) {
+      const slugTaken = await prisma.series.findUnique({ where: { slug } });
+      if (!slugTaken) {
+        try {
+          return await prisma.series.update({
+            where: { id: existingByName.id },
+            data: { slug },
+          });
+        } catch {
+          return existingByName;
+        }
+      }
+    }
+    return existingByName;
+  }
+
   try {
     return await prisma.series.upsert({
       where: { slug },
@@ -115,6 +138,10 @@ async function safeUpsertSeries(name: string, slug: string) {
         await new Promise((r) => setTimeout(r, 50 * (i + 1)));
         const reFound = await prisma.series.findUnique({ where: { slug } });
         if (reFound) return reFound;
+        const reFoundByName = await prisma.series.findFirst({
+          where: { canonicalName: { equals: name, mode: "insensitive" } },
+        });
+        if (reFoundByName) return reFoundByName;
       }
       const fallbackSlug = `${slug}-${Math.random().toString(36).slice(2, 7)}`;
       return await prisma.series.create({

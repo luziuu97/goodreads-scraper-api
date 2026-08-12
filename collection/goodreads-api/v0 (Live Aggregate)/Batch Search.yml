@@ -1,7 +1,11 @@
 info:
   name: Batch Search
   type: http
-  seq: 7
+  seq: 9
+
+docs: |
+  Prefer one item per ISBN for library imports. Store isbn from each hit.
+  HTTP 200 even when some items fail — check results[].success.
 
 http:
   method: POST
@@ -13,20 +17,10 @@ http:
     type: json
     data: |-
       {
-        "provider": "aggregate",
         "items": [
-          {"query":"9780593798430","type":"isbn","limit":20,"language":"en"},
-          {"query":"0593798430","type":"isbn","limit":20,"language":"en"},
-          {"query":"The Correspondent Virginia      Evans","type":"all","limit":20,"language":"en"},
-          {"query":"The Correspondent","type":"all","limit":20,"language":"en"},
-
-          {"query":"El origen de las palabras Damián González Bertolino","type":"all","limit":20,"language":"en"},
-          {"query":"El origen de las palabras","type":"all","limit":20,"language":"en"},
-
-          {"query":"Country People Daniel       Mason","type":"all","limit":20,"language":"en"},
-          {"query":"Country People","type":"all","limit":20,"language":"en"},
-
-          {"query":"The Golden Raven Nora Sakavic","type":"all","limit":20,"language":"en"}
+          { "isbn": "9781649374042", "limit": 1 },
+          { "isbn": "9788496208926", "language": "es", "limit": 1 },
+          { "title": "Foundation", "author": "Isaac Asimov", "limit": 1 }
         ]
       }
   auth: inherit

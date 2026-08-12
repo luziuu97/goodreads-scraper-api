@@ -2,3 +2,4 @@ name: Local
 variables:
   - name: url
     value: http://localhost:3000
+    description: Local Next server. Use ISBN path params from search hits.

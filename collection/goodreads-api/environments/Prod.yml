@@ -2,3 +2,4 @@ name: Prod
 variables:
   - name: url
     value: https://goodreads-scraper-api-production.up.railway.app
+    description: Production. Single /api contract. Prefer ISBN for details/covers/formats.

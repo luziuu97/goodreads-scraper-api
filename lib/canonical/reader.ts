@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { collapseAuthorFragments } from "@/lib/canonical/authority";
 import { formatAudioLength, htmlToMarkdown, isCompilationOrDerivativeTitle, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, toApiBookFormat, toApiFormatLabel, normalizeAndRankCategories, selectBestCover, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
-import { languageFields, toIso639_1 } from "@/lib/languages";
+import { getLanguageName, languageFields, toIso639_1 } from "@/lib/languages";
 import type {
   BookSearchInput,
   NormalizedBookDetailsResponse,
@@ -14,13 +14,60 @@ import { rankEditionsForPresentation } from "@/lib/canonical/edition-selection";
 
 const workInclude = {
   contributors: { include: { author: true }, orderBy: { position: "asc" as const } },
-  seriesMemberships: { include: { series: { include: { translations: true } } } },
+  seriesMemberships: { include: { series: { include: { translations: true, externalIds: true } } } },
   translations: true,
   titles: true,
   editions: { include: { covers: true, externalIds: true } },
   genres: { include: { genre: true } },
   externalIds: true,
 } as const;
+
+function isImportSuffixedSlug(slug: string): boolean {
+  return /-[0-9]{3,}$/.test(slug || "");
+}
+
+function seriesHasHardcover(series: any): boolean {
+  return (series?.externalIds || []).some(
+    (item: any) => item.provider === "hardcover" && item.externalId
+  );
+}
+
+function scoreSeriesMembership(membership: any): number {
+  const series = membership.series || {};
+  let score = 0;
+  if (typeof membership.position === "number" && Number.isFinite(membership.position)) {
+    score += 100;
+  }
+  if (seriesHasHardcover(series)) score += 80;
+  if (!isImportSuffixedSlug(series.slug || "")) score += 50;
+  if (membership.isPrimary) score += 10;
+  return score;
+}
+
+export function collapseWorkSeries(memberships: any[] | undefined) {
+  const groups = new Map<string, any[]>();
+  for (const membership of memberships || []) {
+    const name = normalizeSearchText(membership.series?.canonicalName || membership.series?.name || "");
+    if (!name) continue;
+    groups.set(name, [...(groups.get(name) || []), membership]);
+  }
+
+  return [...groups.values()].map((group) => {
+    const ranked = [...group].sort((a, b) => scoreSeriesMembership(b) - scoreSeriesMembership(a));
+    const winner = ranked[0];
+    const position =
+      ranked
+        .map((item) => item.position)
+        .find((value) => typeof value === "number" && Number.isFinite(value)) ?? null;
+    return {
+      id: winner.series.id,
+      slug: winner.series.slug,
+      name: winner.series.canonicalName,
+      position,
+      isPrimary: Boolean(winner.isPrimary || ranked.some((item) => item.isPrimary)),
+    };
+  });
+}
 
 function primaryAuthor(work: any): any | null {
   return (
@@ -552,27 +599,16 @@ export function canonicalWorkToDetails(
     ? toPublicEdition(edition, work.id, false)
     : null;
 
-  const normalizedEditions = (work.editions || []).map((ed: any) =>
-    toPublicEdition(ed, work.id, true)
-  );
-
-  const publicTranslations = Array.from(
-    (work.translations || []).reduce((byLanguage: Map<string, any>, item: any) => {
-      const code = toIso639_1(item.language) || item.language;
-      if (!code) return byLanguage;
-      const existing = byLanguage.get(code);
-      if (!existing || (!existing.description && item.description)) {
-        byLanguage.set(code, {
-          id: item.id ?? null,
-          workId: item.workId || work.id,
-          language: code,
-          title: item.title,
-          description: item.description ? htmlToMarkdown(item.description) : null,
-        });
-      }
-      return byLanguage;
-    }, new Map<string, any>()).values()
-  );
+  const availableLanguages = Array.from(
+    new Set(
+      [
+        ...(work.translations || []).map((item: any) => toIso639_1(item.language) || item.language),
+        ...(work.editions || []).map((item: any) => toIso639_1(item.language) || item.language),
+      ].filter((code: unknown): code is string => Boolean(code) && code !== "und")
+    )
+  )
+    .sort((a, b) => a.localeCompare(b))
+    .map((code) => ({ code, name: getLanguageName(code) || code }));
 
   function dedupeContributors(contributors: any[]) {
     const seen = new Set<string>();
@@ -643,15 +679,8 @@ export function canonicalWorkToDetails(
       countryCode: edition?.countryCode || null,
       genres: normalizeAndRankCategories(work.genres.map((item: any) => item.genre.name), 5),
       matchedEdition: normalizedMatchedEdition,
-      editions: normalizedEditions,
-      translations: publicTranslations,
-      series: work.seriesMemberships.map((membership: any) => ({
-        id: membership.series.id,
-        slug: membership.series.slug,
-        name: membership.series.canonicalName,
-        position: membership.position,
-        isPrimary: membership.isPrimary,
-      })),
+      availableLanguages,
+      series: collapseWorkSeries(work.seriesMemberships),
     },
   };
 }

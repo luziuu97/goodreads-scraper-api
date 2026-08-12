@@ -2,4 +2,4 @@ name: Staging
 variables:
   - name: url
     value: https://goodreads-scraper-api-testing.up.railway.app
-    description: ""
+    description: Railway testing environment. Same /api contract as production.

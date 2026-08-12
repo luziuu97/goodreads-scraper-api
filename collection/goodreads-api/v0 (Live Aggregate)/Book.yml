@@ -1,26 +1,32 @@
 info:
-  name: Book
+  name: Book Details
   type: http
-  seq: 2
+  seq: 3
+
+docs: |
+  Path should be ISBN-13 (or ISBN-10). Not a Hardcover numeric id.
+  Returns matchedEdition + availableLanguages. No editions[] or translations[].
+  Pass language= to select title/description/edition in that language.
+  Use /formats and /covers for the catalog.
 
 http:
   method: GET
-  url: "{{url}}/api/book/details/:bookId"
+  url: "{{url}}/api/book/details/:isbn"
   params:
+    - name: language
+      value: en
+      type: query
+      disabled: true
     - name: provider
-      value: goodreads
+      value: aggregate
       type: query
       disabled: true
     - name: editionId
-      value: "9789703704279"
+      value: "30707731"
       type: query
       disabled: true
-    - name: reviews
-      value: "false"
-      type: query
-      disabled: true
-    - name: bookId
-      value: "9788408057031"
+    - name: isbn
+      value: "9781649374042"
       type: path
   auth: inherit
 

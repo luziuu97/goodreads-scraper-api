@@ -1,21 +1,24 @@
 info:
   name: Search Series
   type: http
-  seq: 4
+  seq: 7
+
+docs: |
+  Returns series, not books. Open details with slug.
 
 http:
   method: GET
   url: "{{url}}/api/series/search"
   params:
     - name: query
-      value: The Empyrean
+      value: Percy Jackson and the Olympians
       type: query
-    - name: provider
-      value: hardcover
-      type: query
-      disabled: true
     - name: limit
       value: "10"
+      type: query
+      disabled: true
+    - name: provider
+      value: aggregate
       type: query
       disabled: true
   auth: inherit

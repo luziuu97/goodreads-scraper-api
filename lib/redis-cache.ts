@@ -171,7 +171,7 @@ export function buildLogicalCacheKey(
     .join('&');
 
   // Bump schema version when response shape / authority rules change.
-  return `api:${endpoint}:v8:${sorted}`;
+  return `api:${endpoint}:v9:${sorted}`;
 }
 
 /**

@@ -33,6 +33,14 @@ describe("search ranking & compilation filters", () => {
     ).toBe(true);
     expect(isCompilationOrDerivativeTitle("A Game of Thrones")).toBe(false);
     expect(isCompilationOrDerivativeTitle("Game of Thrones")).toBe(false);
+    expect(
+      isCompilationOrDerivativeTitle("Fourth Wing and Iron Flame", "Fourth Wing, Iron Flame")
+    ).toBe(true);
+    expect(isCompilationOrDerivativeTitle("Fourth Wing, Iron Flame")).toBe(true);
+    expect(
+      isCompilationOrDerivativeTitle("Harry Potter and the Philosopher's Stone")
+    ).toBe(false);
+    expect(isCompilationOrDerivativeTitle("Pride and Prejudice")).toBe(false);
   });
 
   test("reader popularity floor drops low-traffic title collisions", () => {

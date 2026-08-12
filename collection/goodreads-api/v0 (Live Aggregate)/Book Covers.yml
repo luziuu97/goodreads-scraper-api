@@ -1,26 +1,30 @@
 info:
   name: Book Covers
   type: http
-  seq: 3
+  seq: 5
+
+docs: |
+  Cover gallery for the same ISBN used on details.
+  covers[].format is the book format (hardcover, ebook, …), not the image type.
 
 http:
   method: GET
-  url: "{{url}}/api/book/covers/:bookId"
+  url: "{{url}}/api/book/covers/:isbn"
   params:
-    - name: provider
-      value: hardcover
-      type: query
-      disabled: true
     - name: limit
-      value: "50"
+      value: "20"
       type: query
       disabled: true
     - name: onlyWithCover
       value: "true"
       type: query
       disabled: true
-    - name: bookId
-      value: "1662524"
+    - name: provider
+      value: aggregate
+      type: query
+      disabled: true
+    - name: isbn
+      value: "9781649374042"
       type: path
   auth: inherit
 
