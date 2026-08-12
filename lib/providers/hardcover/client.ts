@@ -2,6 +2,9 @@ import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
 import {
   formatAudioLength,
   isCompilationOrDerivativeTitle,
+  toApiBookFormat,
+  toApiFormatLabel,
+  type ApiBookFormat,
 } from "@/lib/canonical/constants";
 import { languageFieldsFromParts, toIso639_1 } from "@/lib/languages";
 import { hardcoverLimiter } from "@/lib/outgoing-rate-limiter";
@@ -711,7 +714,10 @@ function normalizeEdition(
     isbn: trimToNull(edition.isbn_13),
     isbn10: trimToNull(edition.isbn_10),
     asin: trimToNull(edition.asin),
-    format: editionFormatLabel(edition as any),
+    format: toApiBookFormat(
+      (edition as any).edition_format,
+      (edition as any).reading_format?.format
+    ),
     publicationDate: trimToNull(edition.release_date),
     pages: typeof edition.pages === "number" ? edition.pages : null,
     audioLength: audioInfo.audioLength,
@@ -1382,7 +1388,10 @@ async function enrichSearchHitsWithEditions(
           isbn10: trimToNull(ed.isbn_10) ?? null,
           asin: trimToNull(ed.asin) ?? null,
           language: language || null,
-          format: trimToNull(ed.edition_format)?.toLowerCase() ?? null,
+          format: toApiBookFormat(
+            ed.edition_format,
+            ed.reading_format?.format
+          ),
           publicationDate: trimToNull(ed.release_date) ?? null,
           cover: toCoverUrl(ed.image || null) || undefined,
         };
@@ -2177,7 +2186,10 @@ export async function fetchHardcoverBookCovers(
       color: imageMeta.color,
       pixelCount: imageMeta.pixelCount,
       imageId: imageMeta.imageId,
-      format: trimToNull(edition.edition_format),
+      format: toApiBookFormat(
+        edition.edition_format,
+        edition.reading_format?.format
+      ),
       isbn: trimToNull(edition.isbn_13),
       isbn10: trimToNull(edition.isbn_10),
       asin: trimToNull(edition.asin),
@@ -2501,17 +2513,17 @@ function normalizeFormatLabel(
 
 /** Whether an edition's normalized format satisfies a format filter. */
 function formatMatchesFilter(
-  entryFormat: SeriesFormatFilter | null,
+  entryFormat: ApiBookFormat | SeriesFormatFilter | null,
   filter: SeriesFormatFilter | null
 ): boolean {
   if (!filter) {
     return true;
   }
-  if (!entryFormat) {
+  if (!entryFormat || entryFormat === "other") {
     return false;
   }
   if (filter === "physical") {
-    return PRINT_FORMATS.has(entryFormat);
+    return PRINT_FORMATS.has(entryFormat as SeriesFormatFilter);
   }
   return entryFormat === filter;
 }
@@ -3346,8 +3358,8 @@ const BOOK_FORMATS_FETCH_CAP = 200;
 export type HardcoverNormalizedBookFormat = {
   editionId: number;
   title: string | null;
-  /** Normalized: ebook | audiobook | hardcover | paperback | null */
-  format: SeriesFormatFilter | null;
+  /** Normalized: ebook | audiobook | hardcover | paperback | other */
+  format: ApiBookFormat;
   formatLabel: string | null;
   editionFormat: string | null;
   readingFormat: string | null;
@@ -3380,7 +3392,7 @@ export type HardcoverNormalizedBookFormats = {
     format: SeriesFormatFilter | null;
   };
   availableLanguages: Array<{ code: string; name: string }>;
-  availableFormats: SeriesFormatFilter[];
+  availableFormats: ApiBookFormat[];
   totalEditions: number;
   totalMatched: number;
 };
@@ -3516,7 +3528,7 @@ export async function fetchHardcoverBookFormats(
       : rawEditions.length;
 
   const languageCounts = new Map<string, { count: number; name: string }>();
-  const formatSet = new Set<SeriesFormatFilter>();
+  const formatSet = new Set<ApiBookFormat>();
 
   type InternalFormat = HardcoverNormalizedBookFormat & {
     _score: number;
@@ -3545,12 +3557,10 @@ export async function fetchHardcoverBookFormats(
     const editionFormat =
       trimToNull(edition.edition_format) || trimToNull(edition.physical_format);
     const readingFormat = trimToNull(edition.reading_format?.format);
-    const normalizedFormat = normalizeFormatLabel(editionFormat, readingFormat);
-    if (normalizedFormat) {
-      formatSet.add(normalizedFormat);
-    }
+    const normalizedFormat = toApiBookFormat(editionFormat, readingFormat);
+    formatSet.add(normalizedFormat);
 
-    const formatLabel = editionFormat || readingFormat;
+    const formatLabel = toApiFormatLabel(editionFormat, readingFormat);
     const usersCount =
       typeof edition.users_count === "number" && Number.isFinite(edition.users_count)
         ? edition.users_count
@@ -3616,7 +3626,9 @@ export async function fetchHardcoverBookFormats(
     .map(([code, meta]) => ({ code, name: meta.name }))
     .sort((a, b) => a.code.localeCompare(b.code));
 
-  const availableFormats = Array.from(formatSet).sort();
+  const availableFormats = Array.from(formatSet).sort((a, b) =>
+    a === "other" ? 1 : b === "other" ? -1 : a.localeCompare(b)
+  );
 
   return {
     scrapedURL: `https://hardcover.app/books/${book.slug}`,

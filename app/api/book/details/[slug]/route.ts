@@ -4,8 +4,7 @@ import { getBookDetailsByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_DETAILS,
-  getCachedResponse,
-  setCachedResponse,
+  getOrSetCached,
 } from "@/lib/redis-cache";
 import { parseLanguageParam } from "@/lib/languages";
 
@@ -65,33 +64,24 @@ export async function GET(
       editionId: editionId ?? "",
       language: language ?? "",
     });
-    const cachedData = await getCachedResponse(cacheKey);
-
-    if (cachedData) {
-      const cachedResponse = NextResponse.json(cachedData);
-      cachedResponse.headers.set(
-        "Cache-Control",
-        "public, s-maxage=86400, stale-while-revalidate=604800"
-      );
-      cachedResponse.headers.set("X-Cache", "HIT");
-      return cachedResponse;
-    }
-
-    const responseBody = await getBookDetailsByProvider({
-      provider,
-      slug: decodeURIComponent(slug),
-      editionId,
-      language,
-    });
+    const { value: responseBody, cache } = await getOrSetCached(
+      cacheKey,
+      CACHE_TTL_DETAILS,
+      () =>
+        getBookDetailsByProvider({
+          provider,
+          slug: decodeURIComponent(slug),
+          editionId,
+          language,
+        })
+    );
 
     const apiResponse = NextResponse.json(responseBody);
     apiResponse.headers.set(
       "Cache-Control",
       "public, s-maxage=86400, stale-while-revalidate=604800"
     );
-    apiResponse.headers.set("X-Cache", "MISS");
-
-    await setCachedResponse(cacheKey, responseBody, CACHE_TTL_DETAILS);
+    apiResponse.headers.set("X-Cache", cache);
 
     return apiResponse;
   } catch (error) {

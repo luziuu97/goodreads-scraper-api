@@ -9,6 +9,7 @@ import {
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { toApiBookFormat, toApiFormatLabel } from "@/lib/canonical/constants";
 import { getLanguageName, languageFields, parseLanguageParam, toIso639_1 } from "@/lib/languages";
 
 export const revalidate = 3600;
@@ -136,9 +137,9 @@ export async function GET(
             return {
               editionId: index + 1,
               title: edition.title,
-              format: edition.format.toLowerCase(),
-              formatLabel: edition.format,
-              editionFormat: edition.format,
+              format: toApiBookFormat(edition.format),
+              formatLabel: toApiFormatLabel(edition.format),
+              editionFormat: toApiFormatLabel(edition.format),
               readingFormat: null,
               ...languageFields(edition.language),
               country: null,
@@ -177,7 +178,9 @@ export async function GET(
           )
             .sort()
             .map((code) => ({ code, name: getLanguageName(code) || code })),
-          availableFormats: Array.from(new Set(localWork.editions.map((edition) => edition.format.toLowerCase()))).sort(),
+          availableFormats: Array.from(
+            new Set(localWork.editions.map((edition) => toApiBookFormat(edition.format)))
+          ).sort((a, b) => (a === "other" ? 1 : b === "other" ? -1 : a.localeCompare(b))),
           totalEditions: localWork.editions.length,
           totalMatched: formats.length,
         };

@@ -1,7 +1,12 @@
+import { gunzipSync, gzipSync } from "node:zlib";
 import Redis from 'ioredis';
 import { LRUCache } from 'lru-cache';
 import { NextRequest } from 'next/server';
 import { env } from 'next-runtime-env';
+
+const GZIP_PREFIX = "gz1:";
+const MEMORY_MAX_ENTRY_BYTES = 8 * 1024;
+const inflightLoads = new Map<string, Promise<unknown>>();
 
 /** Search results TTL: 1 day */
 export const CACHE_TTL_SEARCH = 24 * 60 * 60;
@@ -22,9 +27,37 @@ let redis: Redis | null = null;
 let redisReadyPromise: Promise<Redis | null> | null = null;
 let redisUnavailableUntil = 0;
 const memoryCache = new LRUCache<string, string>({
-  max: 1000,
-  ttl: CACHE_TTL_DETAILS * 1000,
+  max: 400,
+  maxSize: 2_000_000,
+  sizeCalculation: (value) => Math.max(1, value.length),
+  ttl: CACHE_TTL_SEARCH * 1000,
 });
+
+function encodeCacheValue(data: unknown): string {
+  const json = JSON.stringify(data);
+  if (json.length < 1024) return json;
+  return GZIP_PREFIX + gzipSync(json).toString("base64");
+}
+
+function decodeCacheValue(raw: string): any {
+  if (!raw.startsWith(GZIP_PREFIX)) return JSON.parse(raw);
+  return JSON.parse(gunzipSync(Buffer.from(raw.slice(GZIP_PREFIX.length), "base64")).toString("utf8"));
+}
+
+function storeInMemory(cacheKey: string, encoded: string, ttlSeconds: number): void {
+  if (encoded.length > MEMORY_MAX_ENTRY_BYTES) return;
+  memoryCache.set(cacheKey, encoded, { ttl: ttlSeconds * 1000 });
+}
+
+export async function withSingleFlight<T>(key: string, loader: () => Promise<T>): Promise<T> {
+  const existing = inflightLoads.get(key);
+  if (existing) return existing as Promise<T>;
+  const pending = loader().finally(() => {
+    inflightLoads.delete(key);
+  });
+  inflightLoads.set(key, pending);
+  return pending;
+}
 
 function isRedisDisabled(): boolean {
   const value = process.env.DISABLE_REDIS || env('DISABLE_REDIS');
@@ -138,7 +171,7 @@ export function buildLogicalCacheKey(
     .join('&');
 
   // Bump schema version when response shape / authority rules change.
-  return `api:${endpoint}:v6:${sorted}`;
+  return `api:${endpoint}:v8:${sorted}`;
 }
 
 /**
@@ -171,7 +204,7 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   const memoryCached = memoryCache.get(cacheKey);
   if (memoryCached) {
     try {
-      return JSON.parse(memoryCached);
+      return decodeCacheValue(memoryCached);
     } catch {
       memoryCache.delete(cacheKey);
     }
@@ -186,8 +219,9 @@ export async function getCachedResponse(cacheKey: string): Promise<any | null> {
   try {
     const cached = await client.get(cacheKey);
     if (cached) {
-      memoryCache.set(cacheKey, cached);
-      return JSON.parse(cached);
+      const parsed = decodeCacheValue(cached);
+      storeInMemory(cacheKey, cached, CACHE_TTL_SEARCH);
+      return parsed;
     }
   } catch (error) {
     if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
@@ -209,7 +243,7 @@ export async function getCachedResponses(
     const memoryCached = memoryCache.get(key);
     if (memoryCached) {
       try {
-        found.set(key, JSON.parse(memoryCached));
+        found.set(key, decodeCacheValue(memoryCached));
       } catch {
         memoryCache.delete(key);
         redisKeys.push(key);
@@ -230,8 +264,8 @@ export async function getCachedResponses(
       if (!value) continue;
       try {
         const key = redisKeys[i];
-        memoryCache.set(key, value);
-        found.set(key, JSON.parse(value));
+        storeInMemory(key, value, CACHE_TTL_SEARCH);
+        found.set(key, decodeCacheValue(value));
       } catch {
         // Ignore malformed cache entries; the caller will treat them as misses.
       }
@@ -250,9 +284,8 @@ export async function setCachedResponse(
   data: any,
   ttl: number = CACHE_TTL_DETAILS
 ): Promise<void> {
-  memoryCache.set(cacheKey, JSON.stringify(data), {
-    ttl: ttl * 1000,
-  });
+  const encoded = encodeCacheValue(data);
+  storeInMemory(cacheKey, encoded, ttl);
 
   const client = await getReadyRedisClient();
   
@@ -261,12 +294,36 @@ export async function setCachedResponse(
   }
 
   try {
-    await client.setex(cacheKey, ttl, JSON.stringify(data));
+    await client.setex(cacheKey, ttl, encoded);
   } catch (error) {
     if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
       console.error('Redis set error:', error);
     }
   }
+}
+
+export async function getOrSetCached<T>(
+  cacheKey: string,
+  ttl: number,
+  loader: () => Promise<T>,
+  shouldStore: (value: T) => boolean = () => true
+): Promise<{ value: T; cache: "HIT" | "MISS" }> {
+  const hit = await getCachedResponse(cacheKey);
+  if (hit !== null && hit !== undefined) {
+    return { value: hit as T, cache: "HIT" };
+  }
+
+  return withSingleFlight(cacheKey, async () => {
+    const again = await getCachedResponse(cacheKey);
+    if (again !== null && again !== undefined) {
+      return { value: again as T, cache: "HIT" };
+    }
+    const value = await loader();
+    if (shouldStore(value)) {
+      await setCachedResponse(cacheKey, value, ttl);
+    }
+    return { value, cache: "MISS" };
+  });
 }
 
 export async function deleteCachedResponse(cacheKey: string): Promise<void> {

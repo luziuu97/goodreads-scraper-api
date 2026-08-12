@@ -54,7 +54,7 @@ export const getBookCoversApiResponse = {
       color: "#2a1f3d",
       pixelCount: 2160000,
       imageId: 98765,
-      format: "Hardcover",
+      format: "hardcover",
       isbn: "9781649374042",
       isbn10: "1649374046",
       asin: null,

@@ -333,7 +333,7 @@ function buildEditionsArray(
       language: languageFields(
         m.languageCode ?? m.language ?? m.edition?.languageCode ?? m.edition?.language
       ).languageCode,
-      format: (m.edition?.format ?? null)?.toLowerCase() ?? null,
+      format: toApiBookFormat(m.edition?.format),
       publicationDate: m.publicationDate ?? m.edition?.publicationDate ?? null,
       cover: edCover || undefined,
     });
@@ -1411,7 +1411,7 @@ export async function getCoversAggregate(
           color: null,
           pixelCount: cover.pixelCount,
           imageId: null,
-          format: cover.imageFormat,
+          format: toApiBookFormat(edition.format),
           isbn: edition.isbn13,
           isbn10: edition.isbn10,
           asin: edition.asin,

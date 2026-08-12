@@ -1,72 +1,193 @@
-# API Endpoints
+# API Endpoints — App Integration Guide
 
-Structured book metadata API. There is one public contract:
+Examples below were fetched from a local server (`http://localhost:3000`) on 2026-08-12. Arrays are shortened with comments where a real response had more rows.
 
-- **Base URL**: `/api/...` (e.g. `/api/book/search`)
-- **Engine**: canonical database first, with live provider fallback (Hardcover, ISBNDB, Open Library)
-- **Source pin**: `provider=hardcover` (or another provider) still returns that provider’s live object
-- **`/api/v1/...`**: temporary alias of the same `/api/...` routes. Prefer `/api`.
-
-Admin CRUD lives at `/api/admin/...` (`/api/v1/admin/...` is the same alias).
+There is **one public contract** at `/api`. Do not treat `/api/v1` as a second API.
 
 ---
 
-## 1. Search Books
+## Recommended way to use this API
 
-Search for books by title, author, or ISBN.
+Store **ISBN-13** as the book’s primary key. Use ISBN-10 only as a fallback. Do **not** persist Hardcover numeric ids (`714600`, `328491`) or canonical UUIDs as the thing you send back later.
 
-- **Endpoint**: `GET /api/book/search`
-- **Query parameters**:
-  - `query` (required): Search string (title, author, ISBN, or a translated title like `Juego de Tronos`)
-  - `type` (optional): `all` (default) \| `title` \| `author` \| `isbn`
-  - `language` (optional): ISO code (`en`, `es`, …) — return only works with an edition in that language and use it for presentation (title/cover/translator)
-  - `limit` (optional): 1–50 (default 10)
-  - `provider` (optional):
-    - omit or `aggregate` — multi-source default (Hardcover, ISBNDB, OpenLibrary)
-    - `hardcover` — Hardcover only
-    - `isbndb` — ISBNDB only
-    - `openlibrary` — OpenLibrary only
-    - `goodreads` — legacy fallback to `hardcover`
+Hardcover ids change meaning across providers and do not identify an edition. An ISBN does: it is the same book whether search came from Hardcover, the canonical store, or a batch import.
 
-### Example
+### Happy path
+
+1. **Search** `GET /api/book/search?query=…&language=en` (pass the user’s language).
+2. From the chosen hit, save:
+   - `isbn` (ISBN-13) — **required for details**
+   - `isbn10` — fallback
+   - `languageCode` — so later requests stay in that language
+   - `title` / `workTitle` / `author` / `cover` — for the list UI
+3. **Details** `GET /api/book/details/{isbn}?language={languageCode}`
+4. **Covers / formats** with the same ISBN:  
+   `GET /api/book/covers/{isbn}`  
+   `GET /api/book/formats/{isbn}?language=en&format=ebook`
+5. **Series** from `book.series[0].slug`:  
+   `GET /api/series/{slug}`
+
+### Identifier priority
+
+| Priority | Field | Use for |
+| --- | --- | --- |
+| 1 | `isbn` (13-digit) | Details, covers, formats, your database id |
+| 2 | `isbn10` | Same routes if ISBN-13 is missing |
+| 3 | `edition.isbn` / `editions[].isbn` | When the top-level `isbn` is empty but a compact edition list has one |
+| last | `id` (Hardcover number or UUID) | Only if the hit has **no ISBN at all** |
 
 ```
-GET /api/book/search?query=fourth+wing
-GET /api/book/search?query=Juego+de+Tronos
-GET /api/book/search?query=Game+of+Thrones&language=es
-GET /api/book/search?query=9781649374042&provider=hardcover&type=isbn
+Search hit                          What the app stores              Later request
+─────────────────────────────────   ─────────────────────────────    ─────────────────────────────────────────
+isbn: "9781649374042"               9781649374042                    GET /api/book/details/9781649374042
+id: "714600"  (Hardcover)           ignore                           do not call /details/714600
+id: "d3cc279d-…" (canonical UUID)   ignore                           do not persist as the book id
+edition.id: 30707731                ignore                           Hardcover-only; 0 on canonical hits
 ```
 
-### Response
+If you already have an ISBN from a Goodreads CSV or scanner, skip search and call details / batch-search with that ISBN.
+
+### What not to do
+
+- Do not open details with `id` from search when `isbn` is present.
+- Do not send `provider=hardcover` unless you specifically need the live Hardcover object (different types: `author` is an array, `rating` is a string).
+- Do not send `editionId` unless you are on the Hardcover-pinned path and `edition.id > 0`. Canonical search hits use `edition.id: 0`.
+- Do not assume `author` is always an array or `rating` is always a string. Default details: string author, number rating.
+
+---
+
+## Normalized fields
+
+Use these fields as-is. Do not re-case them in the client.
+
+### `format`
+
+Always lowercase. Same vocabulary on search `edition.format`, details editions, covers, formats, and series books.
+
+| Value | Meaning |
+| --- | --- |
+| `ebook` | Kindle, epub, digital |
+| `hardcover` | Hardcover, hardback, library binding, board book |
+| `paperback` | Paperback, mass market, or a physical book with no binding detail |
+| `audiobook` | Audio, Audible, MP3 |
+| `other` | Last resort — source could not be classified |
+
+Display names are on `formatLabel` (`"Hardcover"`, `"Ebook"`). You will not get `HARDCOVER` or `Hardcover` on `format`.
+
+### `language` / `languageCode`
+
+- `languageCode` is an ISO code (`en`, `es`, `fr`).
+- `language` is the English display name (`English`, `Spanish`).
+- Pass `language=es` (the code) on search, details, formats, and series. It is a **strict filter**, not a ranking hint.
+
+### Contributors
+
+On default details:
+
+- `author` — string, primary author
+- `authors` / `translators` / `illustrators` / `narrators` / `editors` — arrays of `{ id, name, role }`
+
+On search, `author` is always a string and `translators` is a string array.
+
+### Rating
+
+Default / aggregate: `rating` is a **number** (`4.02`), `ratingsCount` is a number.  
+`provider=hardcover` details only: `rating` is a **string** (`"4.28"`). Prefer the default path.
+
+---
+
+## Base URL and common parameters
+
+```
+/api
+```
+
+Production: `https://goodreads-scraper-api-production.up.railway.app`
+
+URL-encode query values. Treat leftover ids as opaque strings.
+
+### `provider`
+
+| Value | When to use |
+| --- | --- |
+| omit / `aggregate` | **Default for the app.** Canonical store first, live providers as backup. |
+| `hardcover` | Only if you must have the live Hardcover object. Search `id`s become Hardcover numbers. |
+| `isbndb` / `openlibrary` | Pin to that catalog. Rarely needed. |
+| `goodreads` | Legacy alias for `hardcover`. Do not send this. |
+
+---
+
+## 1. Search books
+
+```http
+GET /api/book/search
+```
+
+### Parameters
+
+| Name | Required | Default | Description |
+| --- | --- | --- | --- |
+| `query` | yes | — | Title, author, ISBN, or a translated title (`Juego de Tronos`). |
+| `type` | no | `all` | `all` \| `title` \| `author` \| `isbn`. Use `isbn` when the query is an ISBN. |
+| `language` | no | — | ISO code. Only works with an edition in that language are returned. Title, cover, and translators come from that edition. |
+| `limit` | no | `10` | 1–50. |
+| `provider` | no | `aggregate` | Leave unset. |
+
+```
+GET /api/book/search?query=fourth+wing&limit=3
+GET /api/book/search?query=Juego+de+Tronos&language=es&limit=2
+GET /api/book/search?query=9781649374042&type=isbn
+```
+
+### App notes
+
+- Render `title` (presentation) and keep `workTitle` as the canonical English title.
+- `presentation` is `work` \| `edition` \| `isbn` — why this edition was chosen.
+- Persist `isbn` + `isbn10` + `languageCode` from the hit. Then call details with the ISBN, not `id`.
+- `edition.id` is a Hardcover edition id. It is `0` on canonical hits. Do not send `0` as `editionId`.
+
+### Real response — title search
+
+`GET /api/book/search?query=fourth+wing&limit=3`
 
 ```json
 {
   "success": true,
   "provider": "aggregate",
   "results": {
-    "query": "Juego de Tronos",
-    "totalResults": 1,
+    "query": "fourth wing",
+    "totalResults": 3,
     "books": [
       {
-        "id": "644",
+        "id": "714600",
         "provider": "hardcover",
-        "title": "Juego de Tronos",
-        "workTitle": "A Game of Thrones",
-        "author": "George R.R. Martin",
-        "cover": "https://...",
-        "rating": 4.45,
-        "publicationDate": "1996-01-01",
-        "language": "Spanish; Castilian",
-        "languageCode": "es",
-        "translators": ["Cristina Macía"],
+        "title": "Fourth Wing",
+        "workTitle": "Fourth Wing",
+        "author": "Rebecca Yarros",
+        "cover": "https://assets.hardcover.app/editions/30707731/3559167047761380.jpeg",
+        "rating": 4.02,
+        "publicationDate": "2023-05-02",
+        "genres": ["Fiction", "Science Fiction & Fantasy", "Fantasy", "Fantasy romance", "High Fantasy"],
+        "isbn": "9781649374042",
+        "isbn10": "1649374046",
+        "language": "English",
+        "languageCode": "en",
         "presentation": "edition",
-        "genres": ["Fantasy"],
-        "isbn": "9788496208926",
         "edition": {
-          "id": 15086528,
-          "title": "Juego de tronos",
-          "languageCode": "es",
-          "publisher": "Gigamesh, S.L."
+          "id": 30707731,
+          "title": "Fourth Wing",
+          "isbn": "9781649374042",
+          "isbn10": "1649374046",
+          "asin": null,
+          "format": "hardcover",
+          "publicationDate": "2023-05-02",
+          "pages": 517,
+          "publisher": "Entangled: Red Tower Books",
+          "language": "English",
+          "languageCode": "en",
+          "country": "United States of America",
+          "countryCode": "us",
+          "cover": "https://assets.hardcover.app/editions/30707731/3559167047761380.jpeg"
         }
       }
     ]
@@ -74,267 +195,449 @@ GET /api/book/search?query=9781649374042&provider=hardcover&type=isbn
 }
 ```
 
-When the query matches a translated edition title (or `language` prefers one), `title` / `cover` / `translators` / `edition` come from that edition. `workTitle` stays the canonical work title. `presentation` is `work` \| `edition` \| `isbn`. Use `edition.id` with book details (`editionId=…`) to open that exact version. Descriptions still come from work-level details when the edition has no separate summary.
+Next call for this hit: `GET /api/book/details/9781649374042` — not `/api/book/details/714600`.
 
-Results are re-ranked for quality: text match and title similarity are balanced with Hardcover popularity (`users_count` / ratings) and completeness (author, cover, rating), so empty catalog shells with an exact title do not outrank well-known editions.
+### Real response — translated title + language
 
-Empty search results are not cached. Successful non-empty results are cached for about **1 day**.
-
----
-
-## 2. Book Details
-
-Retrieve detailed metadata for a book by provider id or slug.
-
-- **Endpoint**: `GET /api/book/details/:slug`
-- **Path**:
-  - `slug`: Hardcover numeric id or slug
-- **Query parameters**:
-  - `provider` (optional): `aggregate` (default) \| `hardcover`
-  - `editionId` (optional): positive integer Hardcover edition id (from ISBN search)
-  - `reviews=true` is **no longer supported** (returns **400**)
-
-### Example
-
-```
-GET /api/book/details/1662524
-GET /api/book/details/the-alchemist?provider=hardcover
-GET /api/book/details/1662524?provider=hardcover&editionId=32963227
-```
-
-### Response
+`GET /api/book/search?query=Juego+de+Tronos&language=es&limit=2`
 
 ```json
 {
   "success": true,
   "provider": "aggregate",
-  "scrapedURL": "canonical://work/...",
-  "book": {
-    "id": "62d7fb9a-bc87-4eb7-a9bb-6df729d67d25",
-    "slug": "fourth-wing",
-    "title": "Fourth Wing",
-    "canonicalTitle": "Fourth Wing",
-    "author": "Rebecca Yarros",
-    "authors": [{ "id": "author-1", "name": "Rebecca Yarros", "role": "AUTHOR" }],
-    "rating": 4.5,
-    "ratingsCount": 120000,
-    "publicationYear": 2023,
-    "language": "en",
-    "languageCode": "en",
-    "genres": ["Fantasy"],
-    "matchedEdition": {
-      "id": "edition-1",
-      "workId": "62d7fb9a-bc87-4eb7-a9bb-6df729d67d25",
-      "title": "Fourth Wing",
-      "format": "hardcover",
-      "language": "en",
-      "isbn13": "9781649374042",
-      "cover": "https://...",
-      "covers": [
-        {
-          "id": "cover-1",
-          "editionId": "edition-1",
-          "provider": "hardcover",
-          "url": "https://...",
-          "width": 1200,
-          "height": 1800,
-          "pixelCount": 2160000,
-          "imageFormat": "jpeg",
-          "isDefault": true
+  "results": {
+    "query": "Juego de Tronos",
+    "totalResults": 2,
+    "books": [
+      {
+        "id": "644",
+        "provider": "hardcover",
+        "title": "Juego de tronos",
+        "workTitle": "A Game of Thrones",
+        "author": "George R.R. Martin",
+        "cover": "https://assets.hardcover.app/edition/17355002/953ff4701de39d1ad64f263154ba141c225f7e70.jpeg",
+        "rating": 4.4,
+        "publicationDate": "1996-08-06",
+        "isbn": "9788496208926",
+        "isbn10": "8496208923",
+        "language": "Spanish",
+        "languageCode": "es",
+        "translators": ["Cristina Macía"],
+        "presentation": "edition",
+        "edition": {
+          "id": 15086528,
+          "title": "Juego de tronos",
+          "isbn": "9788496208926",
+          "isbn10": "8496208923",
+          "format": "paperback",
+          "pages": 790,
+          "publisher": "Gigamesh, S.L.",
+          "language": "Spanish",
+          "languageCode": "es",
+          "country": "Spain",
+          "countryCode": "es"
         }
-      ],
-      "providerMappings": [
-        {
-          "id": "map-1",
-          "provider": "hardcover",
-          "providerWorkId": "1662524",
-          "providerEditionId": null,
-          "workId": "62d7fb9a-bc87-4eb7-a9bb-6df729d67d25",
-          "editionId": "edition-1"
-        }
-      ]
-    },
-    "editions": [],
-    "translations": [],
-    "series": []
+      }
+    ]
   }
 }
 ```
 
-Default details use the canonical work object (`author` is a string, `rating` is a number). Edition rows include both the current `cover` URL and the production dump fields `covers[]` / `providerMappings[]`. Pin `provider=hardcover` to get the live Hardcover object instead (`author` as an array, string `rating`).
+Next call: `GET /api/book/details/9788496208926?language=es`.
 
-Successful details responses are cached for about **14 days**.
+### Real response — ISBN search
 
----
+`GET /api/book/search?query=9781649374042&type=isbn`
 
-## 3. Book Covers
-
-List edition covers for a book, including image metadata from Hardcover (width, height, ratio, dominant color) so clients can show a gallery and pick the best resolution.
-
-- **Endpoint**: `GET /api/book/covers/:slug`
-- **Path**:
-  - `slug`: Hardcover numeric id or slug
-- **Query parameters**:
-  - `provider` (optional): `aggregate` (default) \| `hardcover`
-  - `limit` (optional): 1–100 (default 50) — max editions to fetch
-  - `onlyWithCover` (optional): `true` (default) \| `false` — omit editions without a cover URL
-
-### Example
-
-```
-GET /api/book/covers/1662524
-GET /api/book/covers/fourth-wing?provider=hardcover&limit=50
-GET /api/book/covers/1662524?onlyWithCover=false
-```
-
-### Response
+Canonical hits use a UUID `id` and `edition.id: 0`. The ISBN is still the details key.
 
 ```json
 {
   "success": true,
   "provider": "aggregate",
-  "scrapedURL": "https://hardcover.app/books/fourth-wing",
-  "book": {
-    "id": "1662524",
-    "slug": "fourth-wing",
-    "title": "Fourth Wing",
-    "provider": "hardcover"
-  },
-  "covers": [
-    {
-      "editionId": 32963227,
-      "title": "Fourth Wing",
-      "url": "https://...",
-      "width": 1200,
-      "height": 1800,
-      "ratio": 0.6667,
-      "color": "#2a1f3d",
-      "pixelCount": 2160000,
-      "imageId": 98765,
-      "format": "Hardcover",
-      "isbn": "9781649374042",
-      "isbn10": "1649374046",
-      "asin": null,
-      "publicationDate": "2023-05-02",
-      "pages": 517,
-      "publisher": "Red Tower Books",
-      "language": "English",
-      "languageCode": "en",
-      "country": "United States of America",
-      "countryCode": "us",
-      "isDefault": true
-    }
-  ],
-  "bestByResolution": {
-    "editionId": 32963227,
-    "url": "https://...",
-    "width": 1200,
-    "height": 1800,
-    "pixelCount": 2160000
-  },
-  "totalCovers": 1,
-  "totalEditions": 24
+  "results": {
+    "query": "9781649374042",
+    "totalResults": 1,
+    "books": [
+      {
+        "id": "d3cc279d-09c3-403b-891b-92fa63d15041",
+        "provider": "canonical",
+        "title": "Fourth Wing",
+        "workTitle": "Fourth Wing",
+        "author": "Rebecca Yarros",
+        "isbn": "9781649374042",
+        "isbn10": "1649374046",
+        "language": "English",
+        "languageCode": "en",
+        "presentation": "isbn",
+        "edition": {
+          "id": 0,
+          "isbn": "9781649374042",
+          "isbn10": "1649374046",
+          "format": "hardcover",
+          "pages": 517
+        }
+      }
+    ]
+  }
 }
 ```
 
-Covers are sorted by `pixelCount` descending (unknown dimensions last). On ties, the default cover edition is preferred. Successful responses are cached for about **30 days**.
+Empty search results are not cached. Successful non-empty results are cached about **1 day**.
 
 ---
 
-## 4. Book Formats
+## 2. Book details
 
-List editions/formats for a book from **Hardcover only** (no `provider` parameter). Filter by language and/or format.
-
-- **Endpoint**: `GET /api/book/formats/:slug`
-- **Path**:
-  - `slug`: Hardcover numeric id or slug
-- **Query parameters**:
-  - `language` (optional): ISO code (`en`, `es`, …), `original` (majority language among editions), or omit for all languages
-  - `format` (optional): `ebook` \| `audiobook` \| `hardcover` \| `paperback` \| `physical` (`physical` = hardcover or paperback)
-  - `limit` (optional): 1–100 (default 50) — max matched editions after filtering
-
-### Example
-
-```
-GET /api/book/formats/fourth-wing
-GET /api/book/formats/fourth-wing?language=en&format=ebook
-GET /api/book/formats/714600?language=original
-GET /api/book/formats/fourth-wing?language=es&format=paperback
-GET /api/book/formats/fourth-wing?format=hardcover
-GET /api/book/formats/fourth-wing?format=physical
+```http
+GET /api/book/details/{slug}
 ```
 
-### Response
+`{slug}` can be an ISBN-13, ISBN-10, work slug, canonical UUID, or Hardcover id. **Prefer ISBN.**
+
+### Parameters
+
+| Name | Required | Default | Description |
+| --- | --- | --- | --- |
+| `language` | no | — | ISO code. Selects title, description, edition, and contributors in that language when available. |
+| `provider` | no | `aggregate` | Leave unset. `hardcover` returns a different object shape. |
+| `editionId` | no | — | Hardcover edition id, only with `provider=hardcover` and only when `> 0`. |
+| `reviews` | — | — | `reviews=true` returns **400**. |
+
+```
+GET /api/book/details/9781649374042
+GET /api/book/details/9788496208926?language=es
+GET /api/book/details/9780439554930
+```
+
+### App notes
+
+- Default `book.author` is a **string**. `book.rating` is a **number**.
+- `matchedEdition` is the edition for the ISBN / language you asked for. Use it for ISBN, pages, publisher, cover, country, and `format`.
+- `editions[]` is the full catalog (often 40+). Do not render it raw — use `/api/book/formats` or `/api/book/covers` for UI.
+- `book.series[].slug` is the series-details key.
+- `requestedLanguage` / `isLanguageFallback` tell you whether the description is in the language you asked for.
+
+### Real response — details by ISBN
+
+`GET /api/book/details/9781649374042`
 
 ```json
 {
   "success": true,
-  "scrapedURL": "https://hardcover.app/books/fourth-wing",
+  "provider": "aggregate",
+  "scrapedURL": "canonical://work/d3cc279d-09c3-403b-891b-92fa63d15041",
   "book": {
-    "id": "714600",
-    "slug": "fourth-wing",
+    "id": "d3cc279d-09c3-403b-891b-92fa63d15041",
+    "slug": "fourth-wing-standard-edition-rebecca-yarros-2023",
+    "title": "Fourth Wing",
+    "canonicalTitle": "Fourth Wing",
+    "description": "**Friends, enemies, lovers. Everyone at Basgiath War College has an agenda―because once you enter, there are only two ways out: graduate or die.** …",
+    "descriptionLanguage": "en",
+    "requestedLanguage": null,
+    "isLanguageFallback": false,
+    "language": "English",
+    "languageCode": "en",
+    "author": "Rebecca Yarros",
+    "authors": [{ "id": "252677", "name": "Rebecca Yarros", "role": "AUTHOR" }],
+    "translators": [],
+    "illustrators": [],
+    "narrators": [],
+    "editors": [],
+    "audioLength": null,
+    "audioLengthMinutes": null,
+    "rating": 4.02,
+    "ratingsCount": 3880,
+    "publicationYear": 2023,
+    "publicationDate": "2023-05-02",
+    "publisher": "Entangled: Red Tower Books",
+    "pages": 517,
+    "country": "United States of America",
+    "countryCode": "us",
+    "genres": ["Fiction", "Fantasy", "Fantasy romance", "High Fantasy", "Romance"],
+    "matchedEdition": {
+      "id": "58c0fd3d-0985-4984-9771-0d6828b89155",
+      "workId": "d3cc279d-09c3-403b-891b-92fa63d15041",
+      "title": "Fourth Wing",
+      "format": "hardcover",
+      "language": "en",
+      "languageCode": "en",
+      "isbn13": "9781649374042",
+      "isbn10": "1649374046",
+      "asin": null,
+      "publisher": "Entangled: Red Tower Books",
+      "publicationDate": "2023-05-02",
+      "pages": 517,
+      "country": "United States of America",
+      "countryCode": "us",
+      "isDefault": true,
+      "cover": "https://assets.hardcover.app/editions/30707731/3559167047761380.jpeg"
+    },
+    "series": [
+      {
+        "id": "9c782a68-3c10-4dc7-ab7d-602dddaae8fc",
+        "slug": "the-empyrean",
+        "name": "The Empyrean",
+        "position": 1,
+        "isPrimary": true
+      }
+    ]
+  }
+}
+```
+
+The live payload also includes `editions[]` (40 rows here) and `translations[]`. Use formats/covers endpoints instead of listing every edition.
+
+### Real response — ISBN + Spanish
+
+`GET /api/book/details/9788496208926?language=es`
+
+```json
+{
+  "success": true,
+  "provider": "aggregate",
+  "book": {
+    "title": "Juego de tronos",
+    "canonicalTitle": "A Game of Thrones",
+    "descriptionLanguage": "es",
+    "requestedLanguage": "es",
+    "isLanguageFallback": false,
+    "language": "Spanish",
+    "languageCode": "es",
+    "author": "George R.R. Martin",
+    "translators": [
+      { "id": "73f8c072-460b-476d-ab4f-ac2f822c8792", "name": "Cristina Macia", "role": "TRANSLATOR" }
+    ],
+    "rating": 4.4,
+    "publicationDate": "1996-08-06",
+    "publisher": "Gigamesh, S.L.",
+    "pages": 790,
+    "country": "Spain",
+    "countryCode": "es",
+    "matchedEdition": {
+      "format": "paperback",
+      "language": "es",
+      "isbn13": "9788496208926",
+      "isbn10": "8496208923",
+      "publisher": "Gigamesh, S.L.",
+      "pages": 790,
+      "country": "Spain",
+      "countryCode": "es"
+    },
+    "series": [
+      { "slug": "a-song-of-ice-and-fire", "name": "A Song of Ice and Fire", "position": 1, "isPrimary": true }
+    ]
+  }
+}
+```
+
+### Hardcover-pinned details (avoid as the default)
+
+`GET /api/book/details/328491?provider=hardcover` returns a **different shape**: `author` is an array, `rating` is a string, `series` is `"Harry Potter #1"`. Only use this if you are explicitly integrating Hardcover.
+
+Successful details are cached about **14 days**.
+
+---
+
+## 3. Book covers
+
+```http
+GET /api/book/covers/{isbn}
+```
+
+Pass the same ISBN you used for details.
+
+### Parameters
+
+| Name | Required | Default | Description |
+| --- | --- | --- | --- |
+| `limit` | no | `50` | 1–100. |
+| `onlyWithCover` | no | `true` | `true`/`false`, `1`/`0`. |
+| `provider` | no | `aggregate` | Leave unset. |
+
+```
+GET /api/book/covers/9781649374042?limit=3
+```
+
+`covers[].format` is the **book** format (`hardcover`, `ebook`, …), not the image type. Image type is not on this object; use `url` / `width` / `height` / `pixelCount`. Sort is already `pixelCount` descending. `bestByResolution` is the first pick for a hero image.
+
+### Real response
+
+`GET /api/book/covers/9781649374042?limit=3`
+
+```json
+{
+  "success": true,
+  "provider": "aggregate",
+  "scrapedURL": "canonical://work/d3cc279d-09c3-403b-891b-92fa63d15041",
+  "book": {
+    "id": "d3cc279d-09c3-403b-891b-92fa63d15041",
+    "slug": "fourth-wing-standard-edition-rebecca-yarros-2023",
+    "title": "Fourth Wing",
+    "provider": "canonical"
+  },
+  "covers": [
+    {
+      "editionId": 39,
+      "title": "Fourth Wing",
+      "url": "https://assets.hardcover.app/editions/30707731/3559167047761380.jpeg",
+      "width": 646,
+      "height": 1000,
+      "ratio": 0.646,
+      "pixelCount": 646000,
+      "format": "hardcover",
+      "isbn": "9781649374042",
+      "isbn10": "1649374046",
+      "publicationDate": "2023-05-02",
+      "pages": 517,
+      "publisher": "Entangled: Red Tower Books",
+      "language": "English",
+      "languageCode": "en",
+      "isDefault": true
+    }
+  ],
+  "bestByResolution": {
+    "editionId": 39,
+    "url": "https://assets.hardcover.app/editions/30707731/3559167047761380.jpeg",
+    "width": 646,
+    "height": 1000,
+    "pixelCount": 646000
+  },
+  "totalCovers": 3,
+  "totalEditions": 40
+}
+```
+
+Cached about **30 days**.
+
+---
+
+## 4. Book formats / editions
+
+```http
+GET /api/book/formats/{isbn}
+```
+
+Use this for “Paperback / Ebook / Audiobook” pickers. Do not scrape `details.editions`.
+
+No `provider` parameter.
+
+### Parameters
+
+| Name | Required | Default | Description |
+| --- | --- | --- | --- |
+| `language` | no | all | ISO code, or `original` (majority language). |
+| `format` | no | all | `ebook` \| `audiobook` \| `hardcover` \| `paperback` \| `physical` (`physical` = hardcover + paperback). |
+| `limit` | no | `50` | 1–100 after filtering. |
+
+```
+GET /api/book/formats/9781649374042?limit=4
+GET /api/book/formats/9781649374042?language=en&format=ebook&limit=2
+```
+
+Build filter chips from `availableLanguages` and `availableFormats` (unfiltered work). Each row’s `format` is normalized; `formatLabel` is the display string. Prefer `isbn` on the row when the user picks an edition.
+
+### Real response — unfiltered
+
+`GET /api/book/formats/9781649374042?limit=4`
+
+```json
+{
+  "success": true,
+  "scrapedURL": "canonical://work/d3cc279d-09c3-403b-891b-92fa63d15041",
+  "book": {
+    "id": "d3cc279d-09c3-403b-891b-92fa63d15041",
+    "slug": "fourth-wing-standard-edition-rebecca-yarros-2023",
     "title": "Fourth Wing"
   },
   "formats": [
     {
-      "editionId": 31440211,
+      "editionId": 1,
       "title": "Fourth Wing",
       "format": "ebook",
-      "formatLabel": "Kindle",
-      "editionFormat": "Kindle",
-      "readingFormat": "Ebook",
+      "formatLabel": "Ebook",
       "language": "English",
       "languageCode": "en",
-      "country": "United States of America",
-      "countryCode": "us",
-      "isbn": null,
-      "isbn10": null,
-      "asin": "B0BGHCXCYB",
-      "pages": 517,
+      "isbn": "9781649374080",
+      "isbn10": "1649374089",
+      "asin": "B0BGDM197Q",
+      "pages": 665,
       "publicationDate": "2023-05-02",
-      "publisher": "Red Tower Books",
-      "cover": "https://...",
-      "usersCount": 12000
+      "publisher": "Entangled: Red Tower Books",
+      "cover": "https://assets.hardcover.app/editions/31440211/583299284126972.jpg"
+    },
+    {
+      "editionId": 3,
+      "title": "Fourth Wing",
+      "format": "audiobook",
+      "formatLabel": "Audiobook",
+      "language": "English",
+      "languageCode": "en",
+      "isbn": "9781705085042",
+      "isbn10": "1705085040",
+      "publisher": "Recorded Books"
     }
   ],
+  "filters": {
+    "language": null,
+    "resolvedLanguage": null,
+    "originalLanguage": "en",
+    "format": null
+  },
+  "availableLanguages": [
+    { "code": "en", "name": "English" },
+    { "code": "es", "name": "Spanish" },
+    { "code": "fr", "name": "French" }
+  ],
+  "availableFormats": ["audiobook", "ebook", "hardcover", "paperback"],
+  "totalEditions": 40,
+  "totalMatched": 4
+}
+```
+
+### Real response — English ebooks only
+
+`GET /api/book/formats/9781649374042?language=en&format=ebook&limit=2`
+
+```json
+{
   "filters": {
     "language": "en",
     "resolvedLanguage": "en",
     "originalLanguage": "en",
     "format": "ebook"
   },
-  "availableLanguages": [
-    { "code": "en", "name": "English" },
-    { "code": "es", "name": "Spanish; Castilian" }
+  "formats": [
+    { "format": "ebook", "isbn": "9781649374080", "asin": "B0BGDM197Q", "pages": 665 },
+    { "format": "ebook", "isbn": "9780349436982", "pages": 658 }
   ],
-  "availableFormats": ["audiobook", "ebook", "hardcover", "paperback"],
-  "totalEditions": 78,
-  "totalMatched": 1
+  "totalMatched": 2
 }
 ```
 
-Editions are ordered by Hardcover `users_count` descending. Successful responses are cached for about **30 days** (cache key includes language, format, and limit).
+Cached about **30 days**.
 
 ---
 
-## 5. Search Series
+## 5. Search series
 
-Search for book series by name. Returns **series-shaped** results (not books).
-
-- **Endpoint**: `GET /api/series/search`
-- **Query parameters**:
-  - `query` (required): Series name search string
-  - `limit` (optional): 1–50 (default 10)
-  - `provider` (optional): `aggregate` (default) \| `hardcover`
-
-### Example
-
-```
-GET /api/series/search?query=The+Empyrean
-GET /api/series/search?query=Empyrean&provider=hardcover&limit=10
+```http
+GET /api/series/search
 ```
 
-### Response
+Returns series, not books. Open details with `slug`.
+
+| Name | Required | Default | Description |
+| --- | --- | --- | --- |
+| `query` | yes | — | Series name. |
+| `limit` | no | `10` | 1–50. |
+| `provider` | no | `aggregate` | Leave unset. |
+
+```
+GET /api/series/search?query=The+Empyrean&limit=3
+```
+
+### Real response
 
 ```json
 {
@@ -345,82 +648,76 @@ GET /api/series/search?query=Empyrean&provider=hardcover&limit=10
     "totalResults": 1,
     "series": [
       {
-        "id": "41764",
-        "provider": "hardcover",
+        "id": "9c782a68-3c10-4dc7-ab7d-602dddaae8fc",
+        "provider": "canonical",
         "name": "The Empyrean",
         "slug": "the-empyrean",
         "author": "Rebecca Yarros",
-        "booksCount": 12,
-        "primaryBooksCount": 3,
-        "readersCount": 120000,
-        "sampleBooks": ["Fourth Wing", "Iron Flame"]
+        "booksCount": 1,
+        "sampleBooks": ["Fourth Wing"]
       }
     ]
   }
 }
 ```
 
-Empty series search results are not cached. Successful non-empty results are cached for about **1 day**.
+Next: `GET /api/series/the-empyrean`.
 
 ---
 
-## 6. Series Details
+## 6. Series details
 
-Retrieve series metadata and its ordered books. Use `limit` / `offset` to page through long series lists.
+```http
+GET /api/series/{slug}
+```
 
-By default, results are **deduped to one book per series position** in the series’ **original language** (inferred from featured primary editions). Use `language` / `format` to refine.
+Default: one book per series position in the series’ original language.
 
-- **Endpoint**: `GET /api/series/:slug`
-- **Path**:
-  - `slug`: Hardcover numeric id or slug
-- **Query parameters**:
-  - `provider` (optional): `aggregate` (default) \| `hardcover`
-  - `limit` (optional): 1–100 (default 50)
-  - `offset` (optional): non-negative integer (default 0)
-  - `language` (optional): ISO code (`en`, `es`, …) or `original` (**default**). Original = majority language among featured non-compilation books.
-  - `format` (optional): `ebook` \| `audiobook` \| `hardcover` \| `paperback` \| `physical` — prefer editions of that format (`physical` = hardcover or paperback)
-
-### Example
+| Name | Required | Default | Description |
+| --- | --- | --- | --- |
+| `language` | no | `original` | ISO code or `original`. |
+| `format` | no | all | `ebook` \| `audiobook` \| `hardcover` \| `paperback` \| `physical`. |
+| `limit` | no | `50` | 1–100. |
+| `offset` | no | `0` | Next page = `offset + returned` while `< total`. |
+| `provider` | no | `aggregate` | Leave unset. |
 
 ```
+GET /api/series/harry-potter?limit=3
 GET /api/series/the-empyrean
-GET /api/series/percy-jackson-and-the-olympians
-GET /api/series/percy-jackson-and-the-olympians?language=es
-GET /api/series/percy-jackson-and-the-olympians?language=en&format=ebook
-GET /api/series/41764?provider=hardcover&limit=50&offset=0
+GET /api/series/a-song-of-ice-and-fire?language=es
 ```
 
-### Response
+Each book’s `id` is a work id. For the book page, prefer an ISBN from a follow-up details/formats call, or search that title. `format` / `formatLabel` are normalized.
+
+### Real response
+
+`GET /api/series/harry-potter?limit=3`
 
 ```json
 {
   "success": true,
   "provider": "aggregate",
-  "scrapedURL": "https://hardcover.app/series/the-empyrean",
+  "scrapedURL": "canonical://series/ce91cf28-b5e9-4912-91be-7df2e337a6bd",
   "series": {
-    "id": "41764",
-    "slug": "the-empyrean",
-    "name": "The Empyrean",
+    "id": "ce91cf28-b5e9-4912-91be-7df2e337a6bd",
+    "slug": "harry-potter",
+    "name": "Harry Potter",
     "description": null,
-    "booksCount": 12,
-    "primaryBooksCount": 3,
-    "isCompleted": false,
-    "author": {
-      "id": 252677,
-      "name": "Rebecca Yarros",
-      "url": "https://hardcover.app/authors/rebecca-yarros"
-    },
-    "provider": "hardcover"
+    "booksCount": 7,
+    "primaryBooksCount": 7,
+    "isCompleted": null,
+    "author": { "id": 0, "name": "J.K. Rowling", "url": "" },
+    "provider": "canonical"
   },
   "books": [
     {
-      "id": "714600",
-      "slug": "fourth-wing",
-      "title": "Fourth Wing",
-      "author": "Rebecca Yarros",
-      "cover": "https://...",
-      "rating": 4.58,
-      "publicationDate": "2023-05-02",
+      "id": "4d8b7248-c071-4bee-b41d-b17912efb2e5",
+      "slug": "harry-potter-and-the-philosopher-s-stone",
+      "title": "Harry Potter and the Sorcerer's Stone",
+      "author": "J.K. Rowling",
+      "cover": "https://assets.hardcover.app/edition/2667580/06168492-bf52-4333-9ac6-66ed21907865.jpg",
+      "rating": 4.28,
+      "publicationDate": "2003-11-01",
       "position": 1,
       "positionLabel": "1",
       "featured": true,
@@ -433,210 +730,133 @@ GET /api/series/41764?provider=hardcover&limit=50&offset=0
   ],
   "filters": {
     "language": "original",
-    "resolvedLanguage": "en",
-    "originalLanguage": "en",
+    "resolvedLanguage": null,
+    "originalLanguage": null,
     "format": null,
     "dedupedByPosition": true
   },
-  "pagination": {
-    "limit": 50,
-    "offset": 0,
-    "returned": 12,
-    "total": 12
-  }
+  "pagination": { "limit": 3, "offset": 0, "returned": 3, "total": 7 }
 }
 ```
 
-When `language=es`, titles/covers prefer Spanish editions when Hardcover has them (even if the work id is the English book). Compilations and alternate-language translations at the same position are filtered out under the default original-language mode.
-
-Successful series details responses are cached for about **14 days** (cache key includes language/format).
+Cached about **14 days**.
 
 ---
 
-## 7. Batch Search Books
+## 7. Batch search
 
-Search for up to 50 books in a single `POST` request payload. Ideal for rapid library imports (e.g. Goodreads CSV exports).
+```http
+POST /api/book/batch-search
+Content-Type: application/json
+```
 
-- **Endpoint**: `POST /api/book/batch-search`
-- **Headers**: `Content-Type: application/json`
-- **Request Body**:
-  - `provider` (optional): `aggregate` (default) \| `hardcover`
-  - `items` (required): Array of search items (1–50 items).
-  - Item fields:
-    - `query` (optional): Search string (title, author, ISBN)
-    - `isbn` (optional): Direct ISBN-10 or ISBN-13 string
-    - `title` (optional): Book title
-    - `author` (optional): Author name
-    - `type` (optional): `all` (default) \| `title` \| `author` \| `isbn`
-    - `limit` (optional): 1–50 (default 10)
-    - `language` (optional): ISO code (`en`, `es`, …)
+Use this for Goodreads CSV / library imports. Prefer one item per ISBN.
 
-### Example Request
+HTTP 200 even when some items fail — check each item’s `success`.
+
+### Body
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `provider` | no | Default `aggregate`. |
+| `items` | yes | 1–50 objects. |
+
+Each item: `isbn` **or** `query` **or** `title` (+ optional `author`). Optional `type`, `language`, `limit` (1–50, default 10).
 
 ```json
-POST /api/book/batch-search
 {
-  "provider": "aggregate",
   "items": [
-    { "query": "Dune", "limit": 5 },
-    { "isbn": "9780441172719" },
-    { "title": "Foundation", "author": "Isaac Asimov" }
+    { "isbn": "9781649374042", "limit": 1 },
+    { "title": "Foundation", "author": "Isaac Asimov", "limit": 1 }
   ]
 }
 ```
 
-### Example Response
+Same search-hit shape as `GET /api/book/search`. Store `isbn` from each hit.
+
+### Real response
+
+`POST /api/book/batch-search` with the body above:
 
 ```json
 {
   "success": true,
   "provider": "aggregate",
-  "totalItems": 3,
-  "successfulItems": 3,
+  "totalItems": 2,
+  "successfulItems": 2,
   "failedItems": 0,
   "results": [
     {
       "index": 0,
-      "query": "Dune",
+      "query": "9781649374042",
       "success": true,
       "books": [
         {
-          "id": "1662524",
-          "provider": "hardcover",
-          "title": "Dune",
-          "author": "Frank Herbert",
-          "cover": "https://...",
-          "rating": 4.67
+          "id": "d3cc279d-09c3-403b-891b-92fa63d15041",
+          "provider": "canonical",
+          "title": "Fourth Wing",
+          "isbn": "9781649374042",
+          "isbn10": "1649374046",
+          "presentation": "isbn"
         }
       ]
     },
     {
       "index": 1,
-      "query": "9780441172719",
+      "query": "Foundation Isaac Asimov",
       "success": true,
       "books": [
         {
-          "id": "1662524",
+          "id": "188628",
           "provider": "hardcover",
-          "title": "Dune",
-          "author": "Frank Herbert",
-          "cover": "https://...",
-          "isbn": "9780441172719"
+          "title": "Foundation",
+          "author": "Isaac Asimov"
         }
       ]
-    },
-    {
-      "index": 2,
-      "query": "Foundation Isaac Asimov",
-      "success": true,
-      "books": [...]
     }
   ]
 }
 ```
 
-### Behavior & Rate Limits
-- **Cache Pre-resolution**: Items matching existing Redis/DB cache entries resolve instantly.
-- **Throttled Concurrency**: Uncached items process with max **5 concurrent calls** to external providers to prevent upstream failures.
-- **Partial Success**: Individual item errors are reported per result object without failing the overall request.
-- **Rate Limit**: Max **5 batch requests per 10 seconds** per IP (`ABUSE_MAX_BATCH_PER_10S`).
-
----
-
-## Removed endpoints
-
-The following Goodreads HTML-backed endpoints have been **removed** (HTTP 404):
-
-- `/api/author/*`
-- `/api/user/*`
-- Book lists, quotes, and review scrape endpoints
-
-Use structured book search/details instead.
+Limit: **5 batch requests per 10 seconds** per IP. Not cached as a whole.
 
 ---
 
 ## Errors
 
 | Status | Meaning |
-|--------|---------|
-| 400 | Invalid params, removed `provider=goodreads`, or `reviews=true` |
-| 404 | Book/edition not found |
-| 429 | Abuse protection soft throttle |
-| 503 | Provider not configured (e.g. missing `HARDCOVER_API_TOKEN`) |
+| --- | --- |
+| 400 | Missing/invalid params, or `reviews=true` |
+| 404 | Book, edition, or series not found |
+| 429 | Rate limit — retry with backoff |
+| 500 | Unexpected server error |
+| 503 | Provider not configured |
+
+```json
+{ "error": "Query parameter is required" }
+```
+
+```json
+{ "success": false, "status": "Error - Invalid Query", "error": "Book not found" }
+```
+
+Branch on HTTP status.
 
 ---
 
-## Caching & abuse
-
-- Redis optional via `REDIS_URL`; kill switch `DISABLE_REDIS=true`
-- Soft abuse limits: see README (`ABUSE_MAX_REQUESTS_PER_SECOND`, etc.)
-- Successful responses are cached (logical keys include filter params):
+## Caching
 
 | Endpoint | TTL |
-|----------|-----|
-| Book / series search (≥1 hit) | ~1 day |
-| Book details, series details | ~14 days |
-| Book covers, book formats | ~30 days |
-| Empty search / errors | not cached |
+| --- | --- |
+| Search / series search (≥1 hit) | ~1 day |
+| Details / series details | ~14 days |
+| Covers / formats | ~30 days |
+| Empty search / errors / batch | not cached |
+
+`X-Cache: HIT` \| `MISS` \| `DATABASE` is diagnostic only.
 
 ---
 
-## Admin Endpoints & IP Security
+## Removed
 
-Management endpoints under `/api/admin/` allow complete CRUD management (Create, Read, Update, Delete) of Works, Editions, Authors, Series, and Genres.
-
-### IP Whitelisting (`ADMIN_ALLOWED_IPS`)
-
-- **Security Guard**: All `/api/admin/*` requests pass through IP restriction middleware (`lib/admin-auth.ts`).
-- **Configuration**: Set `ADMIN_ALLOWED_IPS` in `.env` as a comma-separated list of allowed IPs:
-  ```env
-  ADMIN_ALLOWED_IPS="127.0.0.1, ::1, 192.168.1.100, 203.0.113.5"
-  ```
-- **Default Access**: If `ADMIN_ALLOWED_IPS` is omitted or empty, access defaults to local loopback (`127.0.0.1`, `::1`) for development safety.
-- **Forbidden Response**: Unauthorized IPs receive a `403 Forbidden` JSON response:
-  ```json
-  {
-    "success": false,
-    "error": "Forbidden: Client IP '203.0.113.99' is not authorized to access admin endpoints."
-  }
-  ```
-
-### 1. Works Management
-
-- `GET /api/admin/works`: List works. Query params: `page` (default 1), `limit` (default 20), `query` (search title/slug), `includeRelations` (`true`|`false`).
-- `POST /api/admin/works`: Create a work with scalar fields and optional nested relations (`translations`, `titles`, `contributors`, `genres`, `externalIds`).
-- `GET /api/admin/works/:id`: Get work details by ID or slug.
-- `PUT` / `PATCH /api/admin/works/:id`: Update work fields and replace/modify nested relations.
-- `DELETE /api/admin/works/:id`: Delete work by ID or slug.
-
-### 2. Editions Management
-
-- `GET /api/admin/editions`: List editions. Query params: `page`, `limit`, `workId`, `isbn10`, `isbn13`, `asin`, `query`.
-- `POST /api/admin/editions`: Create an edition for a work (`workId`, `title`, `format`, `isbn10`, `isbn13`, `covers`, `contributors`, `externalIds`).
-- `GET /api/admin/editions/:id`: Get edition details by ID.
-- `PUT` / `PATCH /api/admin/editions/:id`: Update edition fields, covers, contributors, external IDs.
-- `DELETE /api/admin/editions/:id`: Delete edition by ID.
-
-### 3. Authors Management
-
-- `GET /api/admin/authors`: List authors (`page`, `limit`, `query`).
-- `POST /api/admin/authors`: Create author (`name`, `slug`, `externalIds`).
-- `GET /api/admin/authors/:id`: Get author details by ID or slug.
-- `PUT` / `PATCH /api/admin/authors/:id`: Update author (`name`, `slug`, `externalIds`).
-- `DELETE /api/admin/authors/:id`: Delete author.
-
-### 4. Series Management
-
-- `GET /api/admin/series`: List series (`page`, `limit`, `query`).
-- `POST /api/admin/series`: Create series (`canonicalName`, `slug`, `booksCount`, `translations`, `externalIds`, `memberships`).
-- `GET /api/admin/series/:id`: Get series details by ID or slug.
-- `PUT` / `PATCH /api/admin/series/:id`: Update series.
-- `DELETE /api/admin/series/:id`: Delete series.
-
-### 5. Genres Management
-
-- `GET /api/admin/genres`: List all genres.
-- `POST /api/admin/genres`: Create genre (`name`).
-- `PUT` / `PATCH /api/admin/genres/:id`: Update genre name.
-- `DELETE /api/admin/genres/:id`: Delete genre.
-
+`/api/author/*`, `/api/user/*`, lists, quotes, and review scrapes return **404**. `reviews=true` on details returns **400**.

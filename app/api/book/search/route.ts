@@ -8,8 +8,7 @@ import {
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
-  getCachedResponse,
-  setCachedResponse,
+  getOrSetCached,
 } from "@/lib/redis-cache";
 import { parseLanguageParam } from "@/lib/languages";
 
@@ -105,27 +104,27 @@ export async function GET(req: NextRequest) {
       query: query.trim(),
       language: language || "",
     });
-    const cachedData = await getCachedResponse(cacheKey);
-
-    if (cachedData) {
-      const cachedResponse = NextResponse.json(cachedData);
-      cachedResponse.headers.set("X-Cache", "HIT");
-      return cachedResponse;
-    }
-
-    const responseData = await searchBooksByProvider({
-      provider,
-      query: query.trim(),
-      limit,
-      type,
-      language,
-    });
+    const { value: responseData, cache } = await getOrSetCached(
+      cacheKey,
+      CACHE_TTL_SEARCH,
+      () =>
+        searchBooksByProvider({
+          provider,
+          query: query.trim(),
+          limit,
+          type,
+          language,
+        }),
+      hasSearchResults
+    );
 
     const apiResponse = NextResponse.json(responseData);
-    apiResponse.headers.set("X-Cache", "MISS");
-
+    apiResponse.headers.set("X-Cache", cache);
     if (hasSearchResults(responseData)) {
-      await setCachedResponse(cacheKey, responseData, CACHE_TTL_SEARCH);
+      apiResponse.headers.set(
+        "Cache-Control",
+        "public, s-maxage=3600, stale-while-revalidate=86400"
+      );
     } else {
       apiResponse.headers.set("Cache-Control", "no-store");
     }

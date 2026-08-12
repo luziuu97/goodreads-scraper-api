@@ -4,8 +4,7 @@ import { getBookCoversByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_COVER,
-  getCachedResponse,
-  setCachedResponse,
+  getOrSetCached,
 } from "@/lib/redis-cache";
 
 export const revalidate = 3600;
@@ -79,33 +78,24 @@ export async function GET(
       limit,
       onlyWithCover: onlyWithCover ? "1" : "0",
     });
-    const cachedData = await getCachedResponse(cacheKey);
-
-    if (cachedData) {
-      const cachedResponse = NextResponse.json(cachedData);
-      cachedResponse.headers.set(
-        "Cache-Control",
-        "public, s-maxage=86400, stale-while-revalidate=604800"
-      );
-      cachedResponse.headers.set("X-Cache", "HIT");
-      return cachedResponse;
-    }
-
-    const responseBody = await getBookCoversByProvider({
-      provider,
-      slug: decodedSlug,
-      limit,
-      onlyWithCover,
-    });
+    const { value: responseBody, cache } = await getOrSetCached(
+      cacheKey,
+      CACHE_TTL_COVER,
+      () =>
+        getBookCoversByProvider({
+          provider,
+          slug: decodedSlug,
+          limit,
+          onlyWithCover,
+        })
+    );
 
     const apiResponse = NextResponse.json(responseBody);
     apiResponse.headers.set(
       "Cache-Control",
       "public, s-maxage=86400, stale-while-revalidate=604800"
     );
-    apiResponse.headers.set("X-Cache", "MISS");
-
-    await setCachedResponse(cacheKey, responseBody, CACHE_TTL_COVER);
+    apiResponse.headers.set("X-Cache", cache);
 
     return apiResponse;
   } catch (error) {

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { isIgnoredAuthor, selectBestCover } from "@/lib/canonical/constants";
+import { isIgnoredAuthor, selectBestCover, toApiBookFormat, toApiFormatLabel } from "@/lib/canonical/constants";
 import { canonicalWorkToSearchBook } from "@/lib/canonical/reader";
 import { languageFields } from "@/lib/languages";
 import type {
@@ -248,7 +248,7 @@ export const goodreadsProvider: BookDataProvider = {
         isbn10: ed.isbn10,
         isbn13: ed.isbn13,
         asin: ed.asin,
-        format: ed.format,
+        format: toApiBookFormat(ed.format),
         language: ed.language,
         publisher: ed.publisher,
         pages: ed.pages,
@@ -263,7 +263,7 @@ export const goodreadsProvider: BookDataProvider = {
             isbn10: defaultEdition.isbn10,
             isbn13: defaultEdition.isbn13,
             asin: defaultEdition.asin,
-            format: defaultEdition.format,
+            format: toApiBookFormat(defaultEdition.format),
             language: defaultEdition.language,
             publisher: defaultEdition.publisher,
             pages: defaultEdition.pages,
@@ -333,7 +333,7 @@ export const goodreadsProvider: BookDataProvider = {
           color: null,
           pixelCount: cov.pixelCount,
           imageId: cov.id,
-          format: ed.format,
+          format: toApiBookFormat(ed.format),
           isbn: ed.isbn13,
           isbn10: ed.isbn10,
           asin: ed.asin,
@@ -446,8 +446,8 @@ export const goodreadsProvider: BookDataProvider = {
         featured: true,
         compilation: false,
         ...languageFields(w.originalLanguage),
-        format: ed?.format || null,
-        formatLabel: ed?.format || null,
+        format: ed?.format ? toApiBookFormat(ed.format) : null,
+        formatLabel: ed?.format ? toApiFormatLabel(ed.format) : null,
       };
     });
 

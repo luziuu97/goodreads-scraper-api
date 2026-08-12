@@ -20,17 +20,26 @@ export const BOOK_FORMATS = [
 export type BookFormat = (typeof BOOK_FORMATS)[number];
 
 /**
- * Public API format values. Everything else collapses into these four.
- * Unknown physical bindings default to paperback.
+ * Public API format values. Always lowercase.
+ * `other` is last-resort only — emit it when classification fails.
  */
 export const API_BOOK_FORMATS = [
   "ebook",
   "hardcover",
   "paperback",
   "audiobook",
+  "other",
 ] as const;
 
 export type ApiBookFormat = (typeof API_BOOK_FORMATS)[number];
+
+export const API_FORMAT_LABELS: Record<ApiBookFormat, string> = {
+  ebook: "Ebook",
+  hardcover: "Hardcover",
+  paperback: "Paperback",
+  audiobook: "Audiobook",
+  other: "Other",
+};
 
 /**
  * Titles that are compilations, adaptations, or split volumes rather than the
@@ -227,8 +236,9 @@ export function normalizeBookFormat(
 }
 
 /**
- * Map internal / raw format strings to the public API four-way vocabulary.
- * Unknown values default to paperback (never "other" in API responses).
+ * Map internal / raw format strings to the public lowercase vocabulary.
+ * Known bindings become ebook | hardcover | paperback | audiobook.
+ * `other` is last resort when nothing classifies.
  */
 export function toApiBookFormat(
   rawFormat?: string | null,
@@ -244,10 +254,23 @@ export function toApiBookFormat(
       return "audiobook";
     case "PAPERBACK":
     case "MASS_MARKET":
+      return "paperback";
     case "OTHER":
     default:
-      return "paperback";
+      return "other";
   }
+}
+
+/** Display label for a public format. Raw source text is used only for `other`. */
+export function toApiFormatLabel(
+  rawFormat?: string | null,
+  readingFormat?: string | null
+): string {
+  const api = toApiBookFormat(rawFormat, readingFormat);
+  if (api !== "other") return API_FORMAT_LABELS[api];
+  const raw = (rawFormat || readingFormat || "").trim();
+  if (raw && !/^other$/i.test(raw)) return raw;
+  return API_FORMAT_LABELS.other;
 }
 
 /**

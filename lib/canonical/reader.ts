@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { collapseAuthorFragments } from "@/lib/canonical/authority";
-import { formatAudioLength, htmlToMarkdown, isCompilationOrDerivativeTitle, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, toApiBookFormat, normalizeAndRankCategories, selectBestCover, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
+import { formatAudioLength, htmlToMarkdown, isCompilationOrDerivativeTitle, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, toApiBookFormat, toApiFormatLabel, normalizeAndRankCategories, selectBestCover, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
 import { languageFields, toIso639_1 } from "@/lib/languages";
 import type {
   BookSearchInput,
@@ -813,7 +813,7 @@ export async function getCanonicalSeriesDetails(
       compilation: isCompilation(work, edition),
       ...languageFields(edition?.language || work.originalLanguage),
       format: edition?.format ? toApiBookFormat(edition.format) : null,
-      formatLabel: edition?.format || null,
+      formatLabel: edition?.format ? toApiFormatLabel(edition.format) : null,
     })),
     filters: {
       language: requestedLanguage,
