@@ -1,4 +1,5 @@
 import {
+  authorsAgree,
   isGoodreadsCoverUrl,
   normalizeSearchText,
   normalizeValidIsbn,
@@ -15,6 +16,12 @@ describe('canonical metadata contracts', () => {
 
   test('normalizes punctuation and whitespace consistently', () => {
     expect(normalizeSearchText("  L’Anneau — Unique  ")).toBe('lanneau unique');
+  });
+
+  test('treats reversed catalog author names as the same person', () => {
+    expect(authorsAgree('J. K. Rowling', 'Rowling, J. K.')).toBe(true);
+    expect(authorsAgree('J.K. Rowling', 'J. K. Rowling')).toBe(true);
+    expect(authorsAgree('J. K. Rowling', 'Ernest Hemingway')).toBe(false);
   });
 
   test('accepts valid ISBNs and rejects invalid checksums', () => {

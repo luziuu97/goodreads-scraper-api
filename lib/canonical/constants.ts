@@ -428,6 +428,25 @@ export function normalizeAuthorSlug(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
+/**
+ * Compare catalog author strings that may be reversed ("Rowling, J. K." vs
+ * "J. K. Rowling") or differ only in initials/punctuation.
+ */
+export function authorsAgree(left: string, right: string): boolean {
+  const leftSlug = normalizeAuthorSlug(left);
+  const rightSlug = normalizeAuthorSlug(right);
+  if (!leftSlug || !rightSlug) return false;
+  if (leftSlug === rightSlug) return true;
+
+  const leftTokens = new Set(leftSlug.split("-").filter(Boolean));
+  const rightTokens = new Set(rightSlug.split("-").filter(Boolean));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return false;
+
+  const leftContained = [...leftTokens].every((token) => rightTokens.has(token));
+  const rightContained = [...rightTokens].every((token) => leftTokens.has(token));
+  return leftContained || rightContained;
+}
+
 export function decodeHtmlEntities(text: string): string {
   return text
     .replace(/&amp;/g, "&")

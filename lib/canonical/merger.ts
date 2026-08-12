@@ -4,6 +4,7 @@ import {
   detectImageFormat,
   getCoverPriorityRank,
   htmlToMarkdown,
+  authorsAgree,
   isIgnoredAuthor,
   isTextInLanguage,
   normalizeAuthorSlug,
@@ -302,14 +303,17 @@ export async function upsertCanonicalWorkFromProvider(
       const titleAgrees = knownTitles.some(
         (known) => known === incomingTitle || known.includes(incomingTitle) || incomingTitle.includes(known)
       );
-      const incomingAuthor = normalizeAuthorSlug(effectiveAuthorName);
-      const authorAgrees = !incomingAuthor || edition.work.contributors.some(
-        (item) => normalizeAuthorSlug(item.author.name) === incomingAuthor
-      );
+      const authorAgrees =
+        !effectiveAuthorName.trim() ||
+        edition.work.contributors.some((item) =>
+          authorsAgree(effectiveAuthorName, item.author.name)
+        );
 
-      if (authorAgrees) {
-        existingWorkId = edition.workId;
-      } else {
+      // An ISBN/ASIN already in the catalog is edition identity. Translated
+      // titles (e.g. Spanish vs English Harry Potter) must stay on that work.
+      existingWorkId = edition.workId;
+
+      if (!authorAgrees && !titleAgrees) {
         const conflict = {
           isbn13: validIsbn13,
           isbn10: validIsbn10,
@@ -318,18 +322,16 @@ export async function upsertCanonicalWorkFromProvider(
           existingWorkId: edition.workId,
           provider,
         };
-        console.error("Canonical ISBN conflict quarantined", conflict);
+        console.warn("Canonical ISBN matched an existing work with different title/author; keeping mapping", conflict);
         await prisma.dataConflict.create({
           data: {
-            type: "ISBN_WORK_MISMATCH",
+            type: "ISBN_METADATA_MISMATCH",
             identifier: validIsbn13 || validIsbn10 || "unknown",
             existingWorkId: edition.workId,
             provider,
             incomingData: conflict,
           },
         }).catch((error) => console.error("Failed to persist data conflict", error));
-        validIsbn10 = null;
-        validIsbn13 = null;
       }
     }
   }

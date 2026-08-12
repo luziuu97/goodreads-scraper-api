@@ -289,6 +289,22 @@ function normalizeAuthorizationToken(rawToken: string): string {
   return /^bearer\s+/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`;
 }
 
+const HARDCOVER_TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientHardcoverResponse(status: number, body: string): boolean {
+  if (HARDCOVER_TRANSIENT_STATUSES.has(status)) return true;
+  const lower = body.toLowerCase();
+  return (
+    lower.includes("bad gateway") ||
+    lower.includes("service unavailable") ||
+    lower.includes("gateway timeout")
+  );
+}
+
 async function hardcoverGraphQLRequest<T>(
   query: string,
   variables: Record<string, unknown>
@@ -299,70 +315,91 @@ async function hardcoverGraphQLRequest<T>(
     throw new Error("HARDCOVER_API_TOKEN is required to use provider=hardcover");
   }
 
-  await hardcoverLimiter.acquire();
+  const maxAttempts = 3;
+  let lastError: Error | null = null;
 
-  let response: Response;
-  try {
-    response = await fetch(HARDCOVER_GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": API_CONFIG.userAgent,
-        authorization: normalizeAuthorizationToken(token),
-      },
-      body: JSON.stringify({ query, variables }),
-    });
-  } catch (netErr) {
-    console.error(`[Hardcover GraphQL] Network/fetch request failed:`, netErr);
-    throw netErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await hardcoverLimiter.acquire();
+
+    let response: Response;
+    try {
+      response = await fetch(HARDCOVER_GRAPHQL_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": API_CONFIG.userAgent,
+          authorization: normalizeAuthorizationToken(token),
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+    } catch (netErr) {
+      lastError = netErr instanceof Error ? netErr : new Error(String(netErr));
+      console.error(`[Hardcover GraphQL] Network/fetch request failed:`, netErr);
+      if (attempt < maxAttempts) {
+        await sleep(250 * attempt);
+        continue;
+      }
+      throw lastError;
+    }
+
+    const rawBody = await response.text();
+    if (
+      isTransientHardcoverResponse(response.status, rawBody) &&
+      attempt < maxAttempts
+    ) {
+      const target = String(variables.query || variables.slug || variables.isbn || "request");
+      console.warn(
+        `[Hardcover GraphQL] Transient HTTP ${response.status} for "${target}" (attempt ${attempt}/${maxAttempts})`
+      );
+      await sleep(250 * attempt);
+      continue;
+    }
+
+    let json: GraphQLResponse<T>;
+    try {
+      json = (rawBody ? JSON.parse(rawBody) : {}) as GraphQLResponse<T>;
+    } catch {
+      lastError = new Error(
+        `Hardcover returned unparseable response with status ${response.status}`
+      );
+      console.error(
+        `[Hardcover GraphQL] Invalid JSON response from Hardcover (HTTP ${response.status})`
+      );
+      throw lastError;
+    }
+
+    if (!response.ok) {
+      const message =
+        json.errors?.map((error) => error.message).filter(Boolean).join("; ") ||
+        `Hardcover request failed with status ${response.status}`;
+      console.error(`[Hardcover GraphQL] HTTP ${response.status} Error: ${message}`, {
+        variables,
+        errors: json.errors,
+      });
+      throw new Error(message);
+    }
+
+    if (json.errors && json.errors.length > 0) {
+      const message = json.errors
+        .map((error) => error.message)
+        .filter(Boolean)
+        .join("; ");
+      console.error(`[Hardcover GraphQL] Query Errors: ${message}`, {
+        variables,
+        errors: json.errors,
+      });
+      throw new Error(message || "Hardcover GraphQL request failed");
+    }
+
+    if (!json.data) {
+      console.error(`[Hardcover GraphQL] Missing data field in response`, { variables });
+      throw new Error("Hardcover GraphQL response did not include data");
+    }
+
+    return json.data;
   }
 
-  if (response.status === 429) {
-    const targetQuery = String(variables.query || variables.slug || variables.isbn || "request");
-    console.warn(`[Hardcover GraphQL] Rate limited (HTTP 429) for query: "${targetQuery}"`);
-    throw new Error(`Hardcover request failed with status 429`);
-  }
-
-  let json: GraphQLResponse<T>;
-  try {
-    json = (await response.json()) as GraphQLResponse<T>;
-  } catch (parseErr) {
-    console.error(
-      `[Hardcover GraphQL] Invalid JSON response from Hardcover (HTTP ${response.status}):`,
-      parseErr
-    );
-    throw new Error(`Hardcover returned unparseable response with status ${response.status}`);
-  }
-
-  if (!response.ok) {
-    const message =
-      json.errors?.map((error) => error.message).filter(Boolean).join("; ") ||
-      `Hardcover request failed with status ${response.status}`;
-    console.error(`[Hardcover GraphQL] HTTP ${response.status} Error: ${message}`, {
-      variables,
-      errors: json.errors,
-    });
-    throw new Error(message);
-  }
-
-  if (json.errors && json.errors.length > 0) {
-    const message = json.errors
-      .map((error) => error.message)
-      .filter(Boolean)
-      .join("; ");
-    console.error(`[Hardcover GraphQL] Query Errors: ${message}`, {
-      variables,
-      errors: json.errors,
-    });
-    throw new Error(message || "Hardcover GraphQL request failed");
-  }
-
-  if (!json.data) {
-    console.error(`[Hardcover GraphQL] Missing data field in response`, { variables });
-    throw new Error("Hardcover GraphQL response did not include data");
-  }
-
-  return json.data;
+  throw lastError ?? new Error("Hardcover GraphQL request failed");
 }
 
 function toNumber(value: unknown): number | undefined {
@@ -1866,7 +1903,12 @@ export async function fetchHardcoverBookDetails(
       }
     } catch (isbnErr) {
       console.warn(`[Hardcover GraphQL] ISBN lookup failed for "${cleanIsbnStr}":`, isbnErr);
+      throw isbnErr instanceof Error
+        ? isbnErr
+        : new Error(`Hardcover ISBN lookup failed for "${cleanIsbnStr}"`);
     }
+
+    throw new Error(`No Hardcover edition found for ISBN "${cleanIsbnStr}"`);
   }
 
   const detailsQuery = numericId !== null
