@@ -8,8 +8,7 @@ import type {
   NormalizedSearchBook,
 } from "@/lib/providers/types";
 
-import { normalizeLanguage } from "@/lib/canonical/constants";
-import { toIso639_1, toIso639_2 } from "@/lib/languages";
+import { languageFields, toIso639_1, toIso639_2 } from "@/lib/languages";
 
 const OPEN_LIBRARY_BASE = "https://openlibrary.org";
 const COVERS_BASE = "https://covers.openlibrary.org/b";
@@ -141,8 +140,7 @@ export async function searchOpenLibrary(
       genres: doc.subject?.slice(0, 10),
       isbn: isbn13,
       isbn10: isbn10,
-      language: normalizeLanguage(doc.language?.[0]),
-      languageCode: normalizeLanguage(doc.language?.[0]),
+      ...languageFields(doc.language?.[0]),
       presentation: "work",
       sources: [
         {
@@ -229,7 +227,9 @@ export async function getOpenLibraryBookDetails(
       isbn10: isbn10,
       pages: primaryEdition?.number_of_pages ?? null,
       publisher: primaryEdition?.publishers?.[0] ?? null,
-      language: primaryEdition?.languages?.[0]?.key?.replace("/languages/", "") ?? null,
+      ...languageFields(
+        primaryEdition?.languages?.[0]?.key?.replace("/languages/", "") ?? null
+      ),
       format: primaryEdition?.physical_format ?? null,
       editionsCount: editionsData?.entries?.length ?? 1,
     },
@@ -283,8 +283,9 @@ export async function getOpenLibraryCovers(
       publicationDate: entry.publish_date ?? null,
       pages: entry.number_of_pages ?? null,
       publisher: entry.publishers?.[0] ?? null,
-      language: entry.languages?.[0]?.key?.replace("/languages/", "") ?? null,
-      languageCode: entry.languages?.[0]?.key?.replace("/languages/", "") ?? null,
+      ...languageFields(
+        entry.languages?.[0]?.key?.replace("/languages/", "") ?? null
+      ),
       country: null,
       countryCode: null,
       isDefault: editionCounter === 1,

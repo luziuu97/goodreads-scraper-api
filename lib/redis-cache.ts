@@ -126,8 +126,7 @@ export function normalizeCachePart(value: string): string {
  */
 export function buildLogicalCacheKey(
   endpoint: string,
-  parts: Record<string, string | number | null | undefined>,
-  version: "v0" | "v1" = "v1"
+  parts: Record<string, string | number | null | undefined>
 ): string {
   const sorted = Object.keys(parts)
     .sort()
@@ -138,8 +137,8 @@ export function buildLogicalCacheKey(
     .map((key) => `${key}=${normalizeCachePart(String(parts[key]))}`)
     .join('&');
 
-  // Bump schema version when response shape changes (e.g. language/country/roles).
-  return `api:${version}:${endpoint}:v3:${sorted}`;
+  // Bump schema version when response shape / authority rules change.
+  return `api:${endpoint}:v6:${sorted}`;
 }
 
 /**
@@ -149,8 +148,7 @@ export function buildLogicalCacheKey(
 export function generateCacheKey(
   req: NextRequest,
   endpoint: string,
-  params?: Record<string, string>,
-  version: "v0" | "v1" = "v1"
+  params?: Record<string, string>
 ): string {
   const url = new URL(req.url);
   const searchParams = Array.from(url.searchParams.entries())
@@ -166,7 +164,7 @@ export function generateCacheKey(
         .join('&')
     : '';
 
-  return `api:${version}:${endpoint}:v1:${normalizeCachePart(url.pathname)}:${queryKey}:${paramsKey}`;
+  return `api:${endpoint}:v2:${normalizeCachePart(url.pathname)}:${queryKey}:${paramsKey}`;
 }
 
 export async function getCachedResponse(cacheKey: string): Promise<any | null> {

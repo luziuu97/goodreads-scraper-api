@@ -4,8 +4,10 @@ export async function GET() {
   return NextResponse.json({
     name: "BooksAPI",
     version: "1.0.0",
-    description: "Structured Book & Series Metadata API",
+    description:
+      "Structured Book & Series Metadata API. Use /api/*. /api/v1/* is a temporary alias of the same endpoints.",
     status: "operational",
+    engine: "canonical+hardcover-first aggregate",
     endpoints: {
       search_books: "GET /api/book/search?query={query}",
       book_details: "GET /api/book/details/{slug}",

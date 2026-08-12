@@ -2,6 +2,12 @@
  * Canonical Constants & Normalizers for Books, Editions, Formats, and Languages.
  */
 
+import {
+  canonicalizeLanguage,
+  languageFields,
+  toIso639_1,
+} from "@/lib/languages";
+
 export const BOOK_FORMATS = [
   "HARDCOVER",
   "PAPERBACK",
@@ -12,6 +18,73 @@ export const BOOK_FORMATS = [
 ] as const;
 
 export type BookFormat = (typeof BOOK_FORMATS)[number];
+
+/**
+ * Public API format values. Everything else collapses into these four.
+ * Unknown physical bindings default to paperback.
+ */
+export const API_BOOK_FORMATS = [
+  "ebook",
+  "hardcover",
+  "paperback",
+  "audiobook",
+] as const;
+
+export type ApiBookFormat = (typeof API_BOOK_FORMATS)[number];
+
+/**
+ * Titles that are compilations, adaptations, or split volumes rather than the
+ * primary novel. Used to filter or demote noisy search hits.
+ */
+export const COMPILATION_OR_DERIVATIVE_PATTERNS: RegExp[] = [
+  /\bbundle\b/i,
+  /\bbox(ed)?\s*set\b/i,
+  /\bomnibus\b/i,
+  /\bcollection\b/i,
+  /\bcomplete\s+series\b/i,
+  /\bcomplete\s+\d+\s*books?\b/i,
+  /\bthe\s+story\s+continues\b/i,
+  /\b\d+\s*[-–]\s*book\b/i,
+  /\b\d+-book\b/i,
+  /\ball\s+\d+\s+books?\b/i,
+  /\b\d+\s+volumes?\b/i,
+  /\bvolumes?\s+\d+[-–]\d+\b/i,
+  /\bbooks?\s+\d+\s*[-–/]\s*\d+/i,
+  /\bpreview\b/i,
+  /\bprequel\b/i,
+  /\brpg\b/i,
+  /\bsupplement\b/i,
+  /\bstoryboards?\b/i,
+  /#\s*\d+\s*[-–]\s*#?\s*\d+/i,
+  /\bgraphic\s+novel\b/i,
+  /\bcomics?\b/i,
+  /\bcómic\b/i,
+  /\bpop-?up\b/i,
+  /\bin\s+memoriam\b/i,
+  /\bpart\s*[.#]?\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/i,
+  /\bparte\s+(\d+|uno|dos|tres)\b/i,
+  /\bvolume\s+\d+\b/i,
+  /\bvol\.?\s*\d+\b/i,
+  /\btomo\s+\d+\b/i,
+  /\blibro\s+\d+\b/i,
+  /#\s*\d+\s*$/i,
+  /\bcompanion\b/i,
+  /\bworld\s+of\b/i,
+  /\bguide\s+to\b/i,
+  /\bgu[ií]a\s+de\b/i,
+  /\billustrated\b/i,
+  /\badaptation\b/i,
+];
+
+/** True when the title looks like a bundle, comic issue, split volume, etc. */
+export function isCompilationOrDerivativeTitle(
+  title?: string | null,
+  workTitle?: string | null
+): boolean {
+  const combined = `${title || ""} ${workTitle || ""}`.trim();
+  if (!combined) return false;
+  return COMPILATION_OR_DERIVATIVE_PATTERNS.some((pattern) => pattern.test(combined));
+}
 
 /**
  * Standard ISO 639-1 Language Codes supported by the system.
@@ -68,60 +141,171 @@ export function normalizeValidIsbn(raw?: string | null): string | null {
   return null;
 }
 
-export function normalizeBookFormat(rawFormat?: string | null): BookFormat {
-  if (!rawFormat) return "OTHER";
-  const norm = rawFormat.toLowerCase().trim();
+/**
+ * Normalize provider format labels into the internal BookFormat enum.
+ * Pass Hardcover `edition_format` as rawFormat and `reading_format.format`
+ * as readingFormat — many ebooks only set the latter ("Ebook").
+ */
+export function normalizeBookFormat(
+  rawFormat?: string | null,
+  readingFormat?: string | null
+): BookFormat {
+  const edition = (rawFormat || "").toLowerCase().trim();
+  const reading = (readingFormat || "").toLowerCase().trim();
+  const norm = `${edition} ${reading}`.trim();
+  if (!norm) return "OTHER";
 
+  // Digital first — Kindle/ebook often has null edition_format + reading "Ebook".
   if (
-    norm.includes("hardcover") ||
-    norm.includes("hardback") ||
-    norm.includes("tapa dura") ||
-    norm.includes("relie") ||
-    norm.includes("relié") ||
-    norm.includes("cartoné") ||
-    norm.includes("cartone") ||
-    norm.includes("library binding")
+    edition.includes("ebook") ||
+    edition.includes("e-book") ||
+    edition.includes("e book") ||
+    edition.includes("kindle") ||
+    edition.includes("digital") ||
+    edition.includes("epub") ||
+    edition.includes("pdf") ||
+    edition.includes("nook") ||
+    reading === "ebook" ||
+    reading.includes("ebook") ||
+    reading.includes("e-book")
   ) {
-    return "HARDCOVER";
-  }
-  if (norm.includes("mass market") || norm.includes("pocket") || norm.includes("bolsillo")) {
-    return "MASS_MARKET";
+    return "EBOOK";
   }
   if (
-    norm.includes("paperback") ||
-    norm.includes("softcover") ||
-    norm.includes("tapa blanda") ||
-    norm.includes("broché") ||
-    norm.includes("broche") ||
-    norm.includes("rustica") ||
-    norm.includes("rústica") ||
-    norm.includes("physical book") ||
-    norm.includes("trade paper") ||
-    norm.includes("perfect paperback")
-  ) {
-    return "PAPERBACK";
-  }
-  if (
-    norm.includes("audio") ||
-    norm.includes("mp3") ||
-    norm.includes("cd") ||
-    norm.includes("audible") ||
-    norm.includes("cassette")
+    edition.includes("audio") ||
+    edition.includes("audible") ||
+    edition.includes("mp3") ||
+    edition.includes("cassette") ||
+    reading === "listened" ||
+    reading.includes("audio")
   ) {
     return "AUDIOBOOK";
   }
   if (
-    norm.includes("ebook") ||
-    norm.includes("kindle") ||
-    norm.includes("digital") ||
-    norm.includes("epub") ||
-    norm.includes("pdf") ||
-    norm.includes("nook")
+    edition.includes("hardcover") ||
+    edition.includes("hardback") ||
+    edition.includes("tapa dura") ||
+    edition.includes("relie") ||
+    edition.includes("relié") ||
+    edition.includes("cartoné") ||
+    edition.includes("cartone") ||
+    edition.includes("library binding") ||
+    edition.includes("board book")
   ) {
-    return "EBOOK";
+    return "HARDCOVER";
+  }
+  if (edition.includes("mass market") || edition.includes("pocket") || edition.includes("bolsillo")) {
+    return "MASS_MARKET";
+  }
+  if (
+    edition.includes("paperback") ||
+    edition.includes("softcover") ||
+    edition.includes("tapa blanda") ||
+    edition.includes("broché") ||
+    edition.includes("broche") ||
+    edition.includes("rustica") ||
+    edition.includes("rústica") ||
+    edition.includes("physical book") ||
+    edition.includes("trade paper") ||
+    edition.includes("perfect paperback")
+  ) {
+    return "PAPERBACK";
+  }
+
+  // Hardcover "Read" (edition or reading_format) means a physical/text edition
+  // with no binding detail. Default unknown physical bindings to paperback.
+  if (
+    edition === "read" ||
+    reading === "read" ||
+    (edition.includes("read") && !edition.includes("spread")) ||
+    reading.includes("read")
+  ) {
+    return "PAPERBACK";
   }
 
   return "OTHER";
+}
+
+/**
+ * Map internal / raw format strings to the public API four-way vocabulary.
+ * Unknown values default to paperback (never "other" in API responses).
+ */
+export function toApiBookFormat(
+  rawFormat?: string | null,
+  readingFormat?: string | null
+): ApiBookFormat {
+  const internal = normalizeBookFormat(rawFormat, readingFormat);
+  switch (internal) {
+    case "EBOOK":
+      return "ebook";
+    case "HARDCOVER":
+      return "hardcover";
+    case "AUDIOBOOK":
+      return "audiobook";
+    case "PAPERBACK":
+    case "MASS_MARKET":
+    case "OTHER":
+    default:
+      return "paperback";
+  }
+}
+
+/**
+ * Strip Goodreads/import catalog noise: librarian notes about alternate covers
+ * for the same ISBN/ASIN. These often pollute descriptions from the 2017 dump.
+ *
+ * Examples:
+ * - "An alternate cover edition can be found ..."
+ * - "Librarian's note: An alternate cover for this ASIN can be found ..."
+ * - "[An alternate cover edition for this ISBN can be found]"
+ */
+export function stripAlternateCoverNotes(text?: string | null): string {
+  if (!text || !text.trim()) return text || "";
+
+  const isNoiseLine = (line: string): boolean => {
+    const t = line.trim().replace(/^[\[\(\s]+|[\]\)\s.]+$/g, "");
+    if (!t) return false;
+    const lower = t.toLowerCase();
+    if (!lower.includes("alternate cover") && !lower.includes("alternative cover")) {
+      return false;
+    }
+    // Librarian notes or standalone "an alternate cover ..." catalog lines.
+    if (
+      lower.startsWith("librarian") ||
+      lower.startsWith("an alternate cover") ||
+      lower.startsWith("a alternate cover") ||
+      lower.startsWith("alternate cover") ||
+      lower.startsWith("alternative cover")
+    ) {
+      return true;
+    }
+    // Short noise-only lines that still mention alternate covers.
+    return lower.length < 160 && /alternate\s+covers?\b/.test(lower);
+  };
+
+  // Drop whole lines / paragraphs that are only catalog cover notes.
+  let cleaned = text
+    .split(/\n+/)
+    .filter((line) => !isNoiseLine(line))
+    .join("\n");
+
+  // Strip inline notes that share a paragraph with real synopsis text.
+  cleaned = cleaned
+    .replace(
+      /\(?\s*librarian'?s?\s*note:?\s*an?\s+alternate\s+cover[^)\n]*\)?/gi,
+      ""
+    )
+    .replace(
+      /(?:^|[.!?]\s+)an?\s+alternate\s+cover(?:\s+(?:edition|for|of|to)\b)[^.!?\n]*[.!?]?/gi,
+      (match) => (match.startsWith(".") || match.startsWith("!") || match.startsWith("?") ? match[0] : "")
+    )
+    .replace(/\[\s*an?\s+alternate\s+cover[^\]]*\]/gi, "");
+
+  return cleaned
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 /**
@@ -233,7 +417,7 @@ export function htmlToMarkdown(input: string | null | undefined): string {
   if (!input || !input.trim()) return "";
   let text = input.trim();
   if (!/<[a-z][\s\S]*>/i.test(text)) {
-    return decodeHtmlEntities(text);
+    return stripAlternateCoverNotes(decodeHtmlEntities(text));
   }
 
   text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, content) => `\n\n### ${content.trim()}\n\n`);
@@ -245,12 +429,14 @@ export function htmlToMarkdown(input: string | null | undefined): string {
   text = text.replace(/<br\s*\/?>/gi, "\n");
   text = text.replace(/<\/?[^>]+(>|$)/g, "");
   text = decodeHtmlEntities(text);
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return stripAlternateCoverNotes(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 export const IGNORED_AUTHOR_IDS = new Set<string>([
@@ -331,46 +517,17 @@ export function parseAuthorNames(rawAuthorName?: string | null): { primaryAuthor
 
 /**
  * Normalize language strings/codes into ISO 639-1 standard code (e.g., "Spanish" -> "es").
+ * Empty/unknown long strings become "und". Unrecognized 2–3 letter codes pass through.
  */
 export function normalizeLanguageCode(rawLang?: string | null): string {
-  if (!rawLang) return "und";
-  const norm = rawLang.toLowerCase().trim();
+  if (!rawLang?.trim()) return "und";
+  const code = toIso639_1(rawLang);
+  if (code) return code;
 
-  const iso3ToIso1: Record<string, string> = {
-    eng: "en",
-    spa: "es",
-    fra: "fr",
-    fre: "fr",
-    deu: "de",
-    ger: "de",
-    por: "pt",
-    ita: "it",
-    jpn: "ja",
-    zho: "zh",
-    chi: "zh",
-    rus: "ru",
-    nld: "nl",
-    dut: "nl",
-    pol: "pl",
-    kor: "ko",
-  };
-  if (iso3ToIso1[norm]) return iso3ToIso1[norm];
-
-  if (norm.startsWith("es") || norm.includes("spanish") || norm.includes("español")) return "es";
-  if (norm.startsWith("en") || norm.includes("english") || norm.includes("inglés")) return "en";
-  if (norm.startsWith("fr") || norm.includes("french") || norm.includes("français")) return "fr";
-  if (norm.startsWith("de") || norm.includes("german") || norm.includes("deutsch")) return "de";
-  if (norm.startsWith("pt") || norm.includes("portuguese") || norm.includes("português")) return "pt";
-  if (norm.startsWith("it") || norm.includes("italian") || norm.includes("italiano")) return "it";
-  if (norm.startsWith("ja") || norm.includes("japanese")) return "ja";
-  if (norm.startsWith("zh") || norm.includes("chinese")) return "zh";
-  if (norm.startsWith("ru") || norm.includes("russian")) return "ru";
-  if (norm.startsWith("nl") || norm.includes("dutch")) return "nl";
-  if (norm.startsWith("pl") || norm.includes("polish")) return "pl";
-  if (norm.startsWith("ko") || norm.includes("korean")) return "ko";
-
-  // Return original ISO code if 2-3 letters, else mark it undetermined.
-  return norm.length <= 3 ? norm : "und";
+  const norm = rawLang.toLowerCase().trim().split(/[-_]/)[0];
+  // Preserve short unknown codes for import/debug (e.g. rare ISO tags).
+  if (/^[a-z]{2,3}$/.test(norm)) return norm;
+  return "und";
 }
 
 /**
@@ -535,9 +692,12 @@ export function roundRating(rating?: number | null): number | null {
   return Math.round(rating * 100) / 100;
 }
 
+/**
+ * English display name for a language string from any provider/DB source.
+ * Prefer {@link languageFields} when setting both `language` and `languageCode`.
+ */
 export function normalizeLanguage(lang?: string | null): string | null {
-  if (!lang || !lang.trim()) return null;
-  const clean = lang.trim().toLowerCase();
-  if (clean === "und" || clean === "undetermined" || clean === "unknown") return null;
-  return lang.trim();
+  return languageFields(lang).language;
 }
+
+export { languageFields, canonicalizeLanguage, toIso639_1 };

@@ -3,6 +3,15 @@ import {
   listAvailableProviders,
   listProviders,
 } from "@/lib/providers/registry";
+import {
+  extractPrimaryAuthorName,
+  isBackupProvider,
+  isLiveStructuralProvider,
+  isTrustedLocalDetailsComplete,
+  isTrustedLocalSearchComplete,
+  isTrustedStructuralProvider,
+  parseSeriesLabel,
+} from "@/lib/canonical/authority";
 import { resolveWorkKeys } from "@/lib/canonical/work-resolver";
 import type {
   BookCoversInput,
@@ -20,9 +29,20 @@ import type {
   SeriesDetailsInput,
   SeriesSearchInput,
 } from "@/lib/providers/types";
-import { isGoodreadsCoverUrl, isTextInLanguage, normalizeBookFormat, normalizeAndRankCategories, normalizeSearchText, pickBestCoverUrl, selectBestCover, normalizeLanguage, roundRating } from "@/lib/canonical/constants";
+import {
+  isCompilationOrDerivativeTitle,
+  isGoodreadsCoverUrl,
+  isTextInLanguage,
+  stripAlternateCoverNotes,
+  toApiBookFormat,
+  normalizeAndRankCategories,
+  normalizeSearchText,
+  pickBestCoverUrl,
+  selectBestCover,
+  roundRating,
+} from "@/lib/canonical/constants";
 import { getImageDimensions } from "@/lib/utils/image-size";
-import { toIso639_1 } from "@/lib/languages";
+import { languageFields, languageFieldsFromParts, toIso639_1 } from "@/lib/languages";
 
 function normalizeIsbn(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -31,30 +51,48 @@ function normalizeIsbn(value: string | null | undefined): string | null {
 }
 
 /**
- * Token patterns that indicate an adaptation, companion, or split volume rather
- * than the original novel. Matching any of these penalises relevance score.
- * Hard-coded in constants — move to DB if you need runtime configurability.
+ * Collapse near-duplicate works that share a normalized work title + author
+ * but failed ISBN/work-key merge (common with accent differences).
+ * Preserves first-seen rank order among distinct works.
  */
-const ADAPTATION_PATTERNS: RegExp[] = [
-  /\bgraphic\s+novel\b/i,
-  /\billustrated\b/i,
-  /\bcómic\b/i,
-  /\bcomic\b/i,
-  /\bvolume\b/i,
-  /\bvolumen\b/i,
-  /\btomo\b/i,
-  /\bpart\s+\d+\b/i,
-  /\bparte\s+\d+\b/i,
-  /\blibro\s+\d+\b/i,
-  /\bcompanion\b/i,
-  /\bworld\s+of\b/i,
-  /\bguide\s+to\b/i,
-  /\bguía\s+de\b/i,
-];
+export function dedupeSearchBooksByWorkTitle(
+  books: NormalizedSearchBook[]
+): NormalizedSearchBook[] {
+  const seen = new Map<string, NormalizedSearchBook>();
+  const order: string[] = [];
+  for (const book of books) {
+    const work = normalizeSearchText(book.workTitle || book.title);
+    const author =
+      normalizeSearchText(book.author || "").split(" ").pop() || "";
+    // Long English work titles are unique enough without author — and author
+    // can be polluted (e.g. illustrator GrandPré instead of Rowling on HC).
+    const key =
+      work.split(" ").filter(Boolean).length >= 4 ? work : `${work}|${author}`;
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, book);
+      order.push(key);
+      continue;
+    }
+    const preferNew =
+      (book.provider === "hardcover" && existing.provider !== "hardcover") ||
+      (book.readersCount || 0) > (existing.readersCount || 0) ||
+      ((book.readersCount || 0) === (existing.readersCount || 0) &&
+        (book.ratingsCount || 0) > (existing.ratingsCount || 0));
+    seen.set(
+      key,
+      preferNew ? mergeBooks(book, existing) : mergeBooks(existing, book)
+    );
+  }
+  return order.map((key) => seen.get(key)!);
+}
 
 /**
  * Score a search hit for relevance against the query string.
  * Higher is more relevant. Negative scores are possible for poor matches.
+ *
+ * Popularity (readers / ratings) is a first-class signal so well-known novels
+ * outrank title-exact trivia, pop-ups, and low-traffic catalog shells.
  */
 export function scoreRelevance(book: NormalizedSearchBook, query: string): number {
   let score = 0;
@@ -82,6 +120,9 @@ export function scoreRelevance(book: NormalizedSearchBook, query: string): numbe
     .replace(/\s+/g, " ")
     .trim();
 
+  const stripLeadingArticle = (value: string) =>
+    value.replace(/^(the|a|an)\s+/, "").trim();
+
   const normAuthor = (book.author || "")
     .toLowerCase()
     .normalize("NFD")
@@ -90,15 +131,34 @@ export function scoreRelevance(book: NormalizedSearchBook, query: string): numbe
     .replace(/\s+/g, " ")
     .trim();
 
-  // Title signals
-  if (normTitle === normQuery) score += 100;
-  else if (normTitle.startsWith(normQuery)) score += 60;
-  else if (normTitle.includes(normQuery)) score += 30;
+  // Title signals (treat leading "a/the" as optional so "game of thrones"
+  // strongly matches "A Game of Thrones").
+  if (normTitle === normQuery || stripLeadingArticle(normTitle) === normQuery) {
+    score += 100;
+  } else if (
+    normTitle.startsWith(normQuery) ||
+    stripLeadingArticle(normTitle).startsWith(normQuery)
+  ) {
+    score += 60;
+  } else if (normTitle.includes(normQuery)) {
+    score += 30;
+  }
 
   // Work title signals (canonical English title cross-match)
-  if (normWorkTitle && normWorkTitle === normQuery) score += 80;
-  else if (normWorkTitle && normWorkTitle.startsWith(normQuery)) score += 50;
-  else if (normWorkTitle && normWorkTitle.includes(normQuery)) score += 20;
+  if (
+    normWorkTitle &&
+    (normWorkTitle === normQuery || stripLeadingArticle(normWorkTitle) === normQuery)
+  ) {
+    score += 80;
+  } else if (
+    normWorkTitle &&
+    (normWorkTitle.startsWith(normQuery) ||
+      stripLeadingArticle(normWorkTitle).startsWith(normQuery))
+  ) {
+    score += 50;
+  } else if (normWorkTitle && normWorkTitle.includes(normQuery)) {
+    score += 20;
+  }
 
   // Author signal — partial last-name match is enough
   const queryTokens = normQuery.split(" ");
@@ -116,13 +176,19 @@ export function scoreRelevance(book: NormalizedSearchBook, query: string): numbe
   // Having any ISBN is a quality signal
   if (book.isbn || book.isbn10 || book.edition?.isbn) score += 10;
 
-  // Adaptation / companion penalties
-  const titleForPenalty = book.title || "";
-  for (const pattern of ADAPTATION_PATTERNS) {
-    if (pattern.test(titleForPenalty)) {
-      score -= 60;
-      break;
-    }
+  // Reader popularity — primary ranking boost for aggregate merge.
+  // Use Hardcover-scale readersCount only. Goodreads ratingsCount is a different
+  // metric (often 100× larger) and must not dominate multilingual search.
+  if (book.readersCount && book.readersCount > 0) {
+    score += Math.log10(book.readersCount + 1) * 35;
+  } else if (book.ratingsCount && book.ratingsCount > 0) {
+    // Mild local-catalog signal only when no reader metric exists.
+    score += Math.log10(book.ratingsCount + 1) * 8;
+  }
+
+  // Compilations / derivatives are filtered elsewhere; still demote if present.
+  if (isCompilationOrDerivativeTitle(book.title, book.workTitle)) {
+    score -= 200;
   }
 
   // Extra-token penalty: titles much longer than the query tend to be sub-works
@@ -132,29 +198,65 @@ export function scoreRelevance(book: NormalizedSearchBook, query: string): numbe
     score -= (titleTokenCount - queryTokenCount - 2) * 5;
   }
 
+  // Prefer known authors over "Unknown Author" shells
+  if (!book.author || book.author === "Unknown Author") {
+    score -= 40;
+  }
+
   return score;
 }
 
-const PRIMARY_PROVIDERS = new Set<ProviderId>(["canonical", "goodreads", "hardcover"]);
-
+/** Providers allowed to own work structure in search merge (not backup catalogs). */
 function isPrimaryProvider(providerId?: string | null): boolean {
-  return providerId ? PRIMARY_PROVIDERS.has(providerId as ProviderId) : false;
+  if (!providerId) return false;
+  return (
+    providerId === "canonical" ||
+    isTrustedStructuralProvider(providerId) ||
+    isLiveStructuralProvider(providerId)
+  );
 }
 
 /**
- * Merge two hits for the same work, prioritizing Primary providers (goodreads, hardcover)
- * for core work structure (title, author, workTitle, rating), and using Backup providers
- * (isbndb, openlibrary) to backfill missing fields (ISBNs, edition details, covers, genres).
+ * A search hit is structural only when it comes from Hardcover, the Goodreads
+ * provider, or a canonical row linked to a trusted external id. Pure backup
+ * (ISBNDB/OL) and untrusted canonical cache rows are not structural.
+ */
+function isStructuralSearchHit(book: NormalizedSearchBook): boolean {
+  if (book.provider === "hardcover" || book.provider === "goodreads") return true;
+  if (book.provider === "canonical") {
+    return (book.sources || []).some((source) =>
+      isTrustedStructuralProvider(source.title)
+    );
+  }
+  return false;
+}
+
+/**
+ * Merge two hits for the same work, prioritizing trusted structural providers
+ * (canonical / goodreads-dataset / hardcover) for core work structure, and using
+ * backup providers only to backfill missing fields.
  */
 function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): NormalizedSearchBook {
   const translators = Array.from(
     new Set([...(a.translators ?? []), ...(b.translators ?? [])].filter(Boolean))
   );
+  const illustrators = Array.from(
+    new Set([...(a.illustrators ?? []), ...(b.illustrators ?? [])].filter(Boolean))
+  );
+  const narrators = Array.from(
+    new Set([...(a.narrators ?? []), ...(b.narrators ?? [])].filter(Boolean))
+  );
 
-  const aIsPrimary = isPrimaryProvider(a.provider);
-  const bIsPrimary = isPrimaryProvider(b.provider);
-
-  const primaryHit = aIsPrimary && !bIsPrimary ? a : bIsPrimary && !aIsPrimary ? b : a;
+  // Hardcover wins ties over dataset/canonical when both are primary.
+  const rank = (provider?: string | null) => {
+    if (provider === "hardcover") return 3;
+    if (provider === "goodreads" || provider === "canonical") return 2;
+    if (isPrimaryProvider(provider)) return 1;
+    return 0;
+  };
+  const aRank = rank(a.provider);
+  const bRank = rank(b.provider);
+  const primaryHit = aRank >= bRank ? a : b;
   const secondaryHit = primaryHit === a ? b : a;
 
   const rawGenres = [...(a.genres ?? []), ...(b.genres ?? [])];
@@ -164,10 +266,20 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
   const isbn = primaryHit.isbn || secondaryHit.isbn || null;
   const isbn10 = primaryHit.isbn10 || secondaryHit.isbn10 || null;
   const publicationDate = primaryHit.publicationDate || secondaryHit.publicationDate || undefined;
-  const language = normalizeLanguage(primaryHit.language || secondaryHit.language);
-  const languageCode = normalizeLanguage(primaryHit.languageCode || secondaryHit.languageCode);
+  const { language, languageCode } = languageFieldsFromParts(
+    primaryHit.language || secondaryHit.language,
+    primaryHit.languageCode || secondaryHit.languageCode
+  );
   const rawRating = primaryHit.rating ?? secondaryHit.rating;
   const rating = roundRating(rawRating) ?? undefined;
+  const readersCount = Math.max(
+    primaryHit.readersCount || 0,
+    secondaryHit.readersCount || 0
+  );
+  const ratingsCount = Math.max(
+    primaryHit.ratingsCount || 0,
+    secondaryHit.ratingsCount || 0
+  );
 
   return {
     id: primaryHit.id || secondaryHit.id,
@@ -177,6 +289,8 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
     author: primaryHit.author || secondaryHit.author,
     cover,
     rating,
+    readersCount: readersCount > 0 ? readersCount : undefined,
+    ratingsCount: ratingsCount > 0 ? ratingsCount : undefined,
     publicationDate,
     genres: cleanGenres.length > 0 ? cleanGenres : undefined,
     isbn,
@@ -184,6 +298,8 @@ function mergeBooks(a: NormalizedSearchBook, b: NormalizedSearchBook): Normalize
     language,
     languageCode,
     translators: translators.length > 0 ? translators : undefined,
+    illustrators: illustrators.length > 0 ? illustrators : undefined,
+    narrators: narrators.length > 0 ? narrators : undefined,
     presentation: primaryHit.presentation || secondaryHit.presentation || "isbn",
     confidence: primaryHit.confidence ?? secondaryHit.confidence,
     sources: Array.from(new Set([...(a.sources ?? []), ...(b.sources ?? [])])),
@@ -214,7 +330,9 @@ function buildEditionsArray(
     editions.push({
       isbn: isbn ?? null,
       isbn10: isbn10 ?? null,
-      language: normalizeLanguage(m.language ?? m.edition?.language) ?? null,
+      language: languageFields(
+        m.languageCode ?? m.language ?? m.edition?.languageCode ?? m.edition?.language
+      ).languageCode,
       format: (m.edition?.format ?? null)?.toLowerCase() ?? null,
       publicationDate: m.publicationDate ?? m.edition?.publicationDate ?? null,
       cover: edCover || undefined,
@@ -238,14 +356,20 @@ export async function groupAndMergeByWork(
 ): Promise<NormalizedSearchBook[]> {
   if (books.length === 0) return [];
 
+  // Prefer non-compilation hits; only keep compilations if nothing else matches.
+  const nonDerivatives = books.filter(
+    (book) => !isCompilationOrDerivativeTitle(book.title, book.workTitle)
+  );
+  const pool = nonDerivatives.length > 0 ? nonDerivatives : books;
+
   // Score every hit before grouping so we can pick the best representative
-  const scored = books.map((book) => ({
+  const scored = pool.map((book) => ({
     book,
     score: scoreRelevance(book, query),
   }));
 
   // Resolve work keys concurrently
-  const resolutions = await resolveWorkKeys(books);
+  const resolutions = await resolveWorkKeys(pool);
 
   // Group by work key, tracking scores
   const groups = new Map<
@@ -253,7 +377,7 @@ export async function groupAndMergeByWork(
     { representative: NormalizedSearchBook; bestScore: number; members: NormalizedSearchBook[] }
   >();
 
-  for (let i = 0; i < books.length; i++) {
+  for (let i = 0; i < pool.length; i++) {
     const { book, score } = scored[i];
     const { workKey } = resolutions[i];
 
@@ -263,22 +387,34 @@ export async function groupAndMergeByWork(
     } else {
       existing.members.push(book);
       existing.representative = mergeBooks(existing.representative, book);
-      if (score > existing.bestScore) {
-        existing.bestScore = score;
+      // Keep the higher relevance score for the group; also prefer the member
+      // with more readers as the representative base when scores are close.
+      if (
+        score > existing.bestScore ||
+        (score === existing.bestScore &&
+          (book.readersCount || book.ratingsCount || 0) >
+            (existing.representative.readersCount ||
+              existing.representative.ratingsCount ||
+              0))
+      ) {
+        existing.bestScore = Math.max(existing.bestScore, score);
+        if ((book.readersCount || 0) > (existing.representative.readersCount || 0)) {
+          existing.representative = mergeBooks(book, existing.representative);
+        }
       }
     }
   }
 
-  // Check if primary provider hits (goodreads, hardcover) exist anywhere in the input
-  const hasPrimaryHits = books.some((b) => isPrimaryProvider(b.provider));
+  // Trusted structural hits (Hardcover / dataset-linked canonical) gate whether
+  // backup-only works may appear as standalone results.
+  const hasPrimaryHits = pool.some((b) => isStructuralSearchHit(b));
 
   // Build final results: attach editions[], sort by group bestScore
   const results: Array<{ result: NormalizedSearchBook; score: number }> = [];
 
   for (const { representative, bestScore, members } of groups.values()) {
-    // If primary provider hits exist, main works must originate from primary providers (goodreads, hardcover).
-    // Skip standalone hits that only came from backup data aggregators (isbndb, openlibrary).
-    const hasPrimaryMember = members.some((m) => isPrimaryProvider(m.provider));
+    // If structural hits exist, drop pure backup-only groups.
+    const hasPrimaryMember = members.some((m) => isStructuralSearchHit(m));
     if (hasPrimaryHits && !hasPrimaryMember) {
       continue;
     }
@@ -292,7 +428,9 @@ export async function groupAndMergeByWork(
       return normTitle.includes(normQuery) || normWork.includes(normQuery);
     });
 
-    const primaryMember = members.find((m) => isPrimaryProvider(m.provider));
+    const primaryMember =
+      members.find((m) => m.provider === "hardcover") ||
+      members.find((m) => isStructuralSearchHit(m));
     const baseMember = queryMatchingMember || primaryMember || representative;
     const finalRepresentative = mergeBooks(baseMember, representative);
 
@@ -316,18 +454,78 @@ export async function groupAndMergeByWork(
     }
 
     finalRepresentative.rating = roundRating(finalRepresentative.rating) ?? undefined;
-    finalRepresentative.language = normalizeLanguage(finalRepresentative.language);
-    finalRepresentative.languageCode = normalizeLanguage(finalRepresentative.languageCode);
+    // Carry the best popularity stats from the group for final ranking.
+    const bestReaders = Math.max(
+      0,
+      ...members.map((m) => m.readersCount || 0),
+      finalRepresentative.readersCount || 0
+    );
+    const bestRatings = Math.max(
+      0,
+      ...members.map((m) => m.ratingsCount || 0),
+      finalRepresentative.ratingsCount || 0
+    );
+    if (bestReaders > 0) finalRepresentative.readersCount = bestReaders;
+    if (bestRatings > 0) finalRepresentative.ratingsCount = bestRatings;
+
+    const resolvedLang = languageFieldsFromParts(
+      finalRepresentative.language,
+      finalRepresentative.languageCode
+    );
+    finalRepresentative.language = resolvedLang.language;
+    finalRepresentative.languageCode = resolvedLang.languageCode;
 
     const editions = buildEditionsArray(members);
+    // Re-score after merge so popularity on the representative counts fully.
+    const finalScore = scoreRelevance(finalRepresentative, query);
     results.push({
       result: editions ? { ...finalRepresentative, editions } : finalRepresentative,
-      score: bestScore,
+      score: Math.max(bestScore, finalScore),
     });
   }
 
-  results.sort((a, b) => b.score - a.score);
-  return results.map((r) => r.result);
+  results.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const bReaders = b.result.readersCount || b.result.ratingsCount || 0;
+    const aReaders = a.result.readersCount || a.result.ratingsCount || 0;
+    return bReaders - aReaders;
+  });
+
+  const ranked = results.map((r) => r.result);
+  return applyReaderPopularityFloor(ranked);
+}
+
+/**
+ * When a clear high-traffic primary exists, drop low-reader noise (pop-ups,
+ * catalog shells, trivia books that only share the title string).
+ *
+ * Important: use **readersCount only** (Hardcover users_count scale). Do not
+ * mix in Goodreads ratingsCount (often millions) — that set the floor so high
+ * that legitimate Spanish Hardcover hits (~10k users) were wiped after a local
+ * hit with 1.8M ratings.
+ */
+export function applyReaderPopularityFloor(
+  books: NormalizedSearchBook[]
+): NormalizedSearchBook[] {
+  if (books.length <= 1) return books;
+  const readerOf = (book: NormalizedSearchBook) => book.readersCount || 0;
+  const withReaders = books.filter((book) => readerOf(book) > 0);
+  // If nobody has a comparable reader metric, keep the list intact.
+  if (withReaders.length === 0) return books;
+
+  const maxReaders = Math.max(...withReaders.map(readerOf));
+  // Only apply when something is clearly popular on the readers scale.
+  if (maxReaders < 500) return books;
+  const floor = Math.max(25, Math.floor(maxReaders * 0.02));
+
+  const filtered = books.filter((book) => {
+    const readers = readerOf(book);
+    // Keep books that lack readersCount (local-only) if they have solid ratings;
+    // they are not on the same scale as the floor.
+    if (readers <= 0) return (book.ratingsCount || 0) > 0 || Boolean(book.rating);
+    return readers >= floor;
+  });
+  return filtered.length > 0 ? filtered : books;
 }
 
 /**
@@ -382,16 +580,12 @@ import {
 } from "@/lib/canonical/reader";
 
 /**
- * A local canonical work result is "complete" enough to short-circuit provider
- * calls when it has at least one of: a known rating, a provider mapping, or an
- * edition with an ISBN. This avoids serving a single poorly-populated or
- * incorrectly split work from cache while better provider evidence exists.
+ * Local search hits only short-circuit when linked to a trusted structural
+ * source (Hardcover / Goodreads dataset). ISBNDB-only cache rows never win.
  */
 function isLocalWorkComplete(book: NormalizedSearchBook): boolean {
   if (isGoodreadsCoverUrl(book.cover)) return false;
-  if (book.rating != null) return true;
-  if (book.isbn || book.isbn10 || book.edition?.isbn || book.edition?.isbn10) return true;
-  return false;
+  return isTrustedLocalSearchComplete(book);
 }
 
 function hasSuspiciousForeignPresentation(
@@ -433,19 +627,29 @@ export async function searchAggregate(
         );
     const rejectedIncompletePresentation =
       usableLocalBooks.length !== matchingLocalBooks.length;
-    localBooks = usableLocalBooks;
-    // Only short-circuit if every returned work looks sufficiently populated.
-    const allComplete = !rejectedIncompletePresentation &&
-      usableLocalBooks.length > 0 &&
-      usableLocalBooks.every(isLocalWorkComplete);
-    if (allComplete) {
+    localBooks = usableLocalBooks
+      .filter(
+        (book) => !isCompilationOrDerivativeTitle(book.title, book.workTitle)
+      )
+      .sort((a, b) => scoreRelevance(b, input.query) - scoreRelevance(a, input.query));
+    localBooks = applyReaderPopularityFloor(localBooks);
+    // ISBN lookups can short-circuit on a complete local row. Free-text title
+    // searches always consult Hardcover so reader-popularity ranking can promote
+    // the primary novel over local noise / low-traffic title collisions.
+    const isIsbnQuery = Boolean(normalizeIsbn(input.query));
+    const allComplete =
+      !rejectedIncompletePresentation &&
+      localBooks.length > 0 &&
+      localBooks.every(isLocalWorkComplete);
+    if (allComplete && isIsbnQuery) {
+      const books = localBooks.slice(0, input.limit);
       return {
         success: true,
         provider: "aggregate",
         results: {
           query: input.query,
-          totalResults: usableLocalBooks.length,
-          books: usableLocalBooks,
+          totalResults: books.length,
+          books,
         },
       };
     }
@@ -456,8 +660,12 @@ export async function searchAggregate(
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
-  const primaryProviders = providers.filter((provider) => isPrimaryProvider(provider.id));
-  const backupProviders = providers.filter((provider) => !isPrimaryProvider(provider.id));
+  // Live structural authority is Hardcover only. The goodreads provider re-reads
+  // the same Postgres catalog already queried above and must not outrank HC.
+  const primaryProviders = providers.filter((provider) =>
+    isLiveStructuralProvider(provider.id)
+  );
+  const backupProviders = providers.filter((provider) => isBackupProvider(provider.id));
   const primarySettled = await Promise.allSettled(primaryProviders.map((p) => p.search(input)));
 
   const books: NormalizedSearchBook[] = [...localBooks];
@@ -486,17 +694,19 @@ export async function searchAggregate(
     }
   }
 
-  // Backup providers enrich primary/canonical structure; they never introduce
-  // standalone works. Avoid their latency/quota when primary hits are complete.
+  // Backup providers enrich trusted structure only; never introduce standalone works.
   const primaryBooks = books.filter((book) => isPrimaryProvider(book.provider));
-  const needsBackup = books.length > 0 && books.some(
-    (book) =>
-      !book.isbn ||
-      !book.cover ||
-      isGoodreadsCoverUrl(book.cover) ||
-      !book.publicationDate ||
-      !book.language
-  );
+  const needsBackup =
+    books.length > 0 &&
+    primaryBooks.length > 0 &&
+    books.some(
+      (book) =>
+        !book.isbn ||
+        !book.cover ||
+        isGoodreadsCoverUrl(book.cover) ||
+        !book.publicationDate ||
+        !book.language
+    );
   let backupSettled: PromiseSettledResult<NormalizedSearchBook[]>[] = [];
   if (needsBackup) {
     backupSettled = await Promise.allSettled(backupProviders.map((p) => p.search(input)));
@@ -505,10 +715,23 @@ export async function searchAggregate(
       if (result.status === "fulfilled") books.push(...result.value);
       else lastError = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
     }
+  } else if (books.length === 0) {
+    // No trusted hits at all — last resort search via backup catalogs.
+    backupSettled = await Promise.allSettled(backupProviders.map((p) => p.search(input)));
+    for (const result of backupSettled) {
+      if (result.status === "fulfilled") books.push(...result.value);
+      else lastError = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+    }
   }
 
-  if (books.length === 0 || (localBooks.length === 0 && primaryBooks.length === 0)) {
-    if (lastError && primarySettled.every((result) => result.status === "rejected")) throw lastError;
+  if (books.length === 0) {
+    if (
+      lastError &&
+      primarySettled.every((result) => result.status === "rejected") &&
+      (backupSettled.length === 0 || backupSettled.every((r) => r.status === "rejected"))
+    ) {
+      throw lastError;
+    }
     return {
       success: true,
       provider: "aggregate",
@@ -548,25 +771,28 @@ export async function searchAggregate(
     : merged;
 
   languageFiltered.sort((a, b) => {
-    if (targetIso1) {
-      const aLang = (a.languageCode || a.language || "").toLowerCase();
-      const bLang = (b.languageCode || b.language || "").toLowerCase();
-      const aMatch = aLang.includes(targetIso1);
-      const bMatch = bLang.includes(targetIso1);
-      if (aMatch && !bMatch) return -1;
-      if (!aMatch && bMatch) return 1;
-    }
-
     if (cleanQueryIsbn || input.type === "isbn") {
       const aIsbndb = a.provider === "isbndb" || a.isbn === cleanQueryIsbn || a.isbn10 === cleanQueryIsbn ? 1 : 0;
       const bIsbndb = b.provider === "isbndb" || b.isbn === cleanQueryIsbn || b.isbn10 === cleanQueryIsbn ? 1 : 0;
-      return bIsbndb - aIsbndb;
+      if (aIsbndb !== bIsbndb) return bIsbndb - aIsbndb;
     }
 
-    return 0;
+    // Always re-rank by relevance + readers after language filtering. Otherwise
+    // local Spanish hits (huge Goodreads ratings) float above the full series
+    // of popular Hardcover Spanish editions in arbitrary order.
+    const scoreDiff =
+      scoreRelevance(b, input.query) - scoreRelevance(a, input.query);
+    if (scoreDiff !== 0) return scoreDiff;
+    const readersDiff = (b.readersCount || 0) - (a.readersCount || 0);
+    if (readersDiff !== 0) return readersDiff;
+    return (b.ratingsCount || 0) - (a.ratingsCount || 0);
   });
 
-  const finalBooks = languageFiltered.slice(0, input.limit);
+  // Collapse accent/title variants of the same work that failed work-key merge
+  // (e.g. "Orden del Fénix" vs "Orden del Fenix").
+  const dedupedByWorkTitle = dedupeSearchBooksByWorkTitle(languageFiltered);
+
+  const finalBooks = dedupedByWorkTitle.slice(0, input.limit);
 
   // If every provider failed and we have no books, surface the error.
   if (finalBooks.length === 0 && lastError && primarySettled.every((r) => r.status === "rejected")) {
@@ -581,7 +807,7 @@ export async function searchAggregate(
       title: b.title,
       originalTitle: b.workTitle,
       authorName: b.author,
-      language: b.languageCode || b.language || input.language,
+      language: b.languageCode || toIso639_1(b.language) || input.language,
       publicationDate: b.publicationDate,
       isbn10: b.isbn10 || b.edition?.isbn10,
       isbn13: b.isbn || b.edition?.isbn,
@@ -628,6 +854,127 @@ function normalizeTranslatorList(
   return result.length > 0 ? result : undefined;
 }
 
+/**
+ * Ingest a provider details payload into the canonical store.
+ * Structural providers may write identity fields; backups should only fill gaps.
+ */
+async function ingestDetailsBook(
+  providerId: ProviderId,
+  input: BookDetailsInput,
+  book: Record<string, any>,
+  options?: {
+    /** When true, only write fields that fill holes (no title/author/genres/series). */
+    gapFillOnly?: boolean;
+    descriptionOverride?: string | null;
+  }
+): Promise<void> {
+  if (!book) return;
+  const gapFillOnly = Boolean(options?.gapFillOnly);
+  const seriesRaw =
+    typeof book.series === "string"
+      ? book.series
+      : book.series?.name || book.seriesName || null;
+  const parsedSeries = parseSeriesLabel(
+    typeof seriesRaw === "string" ? seriesRaw : null
+  );
+  const seriesName = gapFillOnly
+    ? undefined
+    : parsedSeries.name ||
+      (typeof book.series === "string"
+        ? book.series.replace(/\s*#\d+.*$/, "").trim()
+        : book.series?.name || book.seriesName) ||
+      undefined;
+  const seriesPosition = gapFillOnly
+    ? undefined
+    : book.series?.position ?? book.seriesPosition ?? parsedSeries.position ?? undefined;
+
+  const workTitle =
+    book.workTitle || book.canonicalTitle || book.originalTitle || book.title || "";
+  // Prefer work title over Amazon-style edition titles that embed series.
+  const presentationTitle = gapFillOnly
+    ? String(workTitle || book.title || "Untitled")
+    : String(book.title || workTitle || "");
+
+  await upsertCanonicalWorkFromProvider({
+    provider: providerId,
+    providerWorkId: String(book.id || book.slug || input.slug),
+    title: presentationTitle,
+    originalTitle: gapFillOnly ? undefined : String(workTitle || presentationTitle || ""),
+    authorName: gapFillOnly ? undefined : extractPrimaryAuthorName(book.author) || undefined,
+    description: String(
+      options?.descriptionOverride || book.description || ""
+    ),
+    language: String(book.languageCode || book.language || input.language || ""),
+    publicationYear: book.publicationYear || book.originalPublicationYear,
+    publicationDate: String(book.publicationDate || book.publishDate || ""),
+    publisher: String(
+      book.publishedBy || book.publisher || book.edition?.publisher || ""
+    ),
+    pages:
+      typeof book.pages === "number"
+        ? book.pages
+        : book.edition?.pages,
+    audioLengthMinutes:
+      typeof book.audioLengthMinutes === "number"
+        ? book.audioLengthMinutes
+        : book.edition?.audioLengthMinutes,
+    isbn10: book.isbn10 || book.edition?.isbn10,
+    isbn13: book.isbn13 || book.isbn || book.edition?.isbn,
+    asin: book.asin || book.edition?.asin,
+    format: book.type || book.bookEdition || book.format || book.edition?.format,
+    coverUrl: book.coverUrl || book.cover || book.image || book.edition?.cover,
+    country: book.country || book.edition?.country || null,
+    countryCode: book.countryCode || book.edition?.countryCode || null,
+    providerEditionId: book.edition?.id != null ? String(book.edition.id) : undefined,
+    rating:
+      typeof book.rating === "number"
+        ? book.rating
+        : typeof book.rating === "string"
+          ? parseFloat(book.rating) || undefined
+          : undefined,
+    ratingsCount:
+      typeof book.ratingsCount === "number"
+        ? book.ratingsCount
+        : parseInt(String(book.ratingCount || book.ratings_count || ""), 10) ||
+          undefined,
+    reviewsCount:
+      typeof book.reviewsCount === "number"
+        ? book.reviewsCount
+        : parseInt(String(book.reviews_count || ""), 10) || undefined,
+    genres: gapFillOnly ? undefined : book.genres,
+    seriesName,
+    seriesPosition: typeof seriesPosition === "number" ? seriesPosition : undefined,
+    translators: gapFillOnly ? undefined : normalizeTranslatorList(book.translators),
+    illustrators: gapFillOnly ? undefined : normalizeTranslatorList(book.illustrators),
+    narrators: gapFillOnly ? undefined : normalizeTranslatorList(book.narrators),
+    editions: Array.isArray(book.editions)
+      ? book.editions.map((ed: any) => ({
+          providerEditionId:
+            ed.id != null
+              ? String(ed.id)
+              : ed.providerEditionId
+                ? String(ed.providerEditionId)
+                : undefined,
+          isbn10: ed.isbn10 || ed.isbn_10,
+          isbn13: ed.isbn || ed.isbn13 || ed.isbn_13,
+          asin: ed.asin,
+          title: ed.title,
+          format: ed.format || ed.edition_format,
+          language:
+            ed.languageCode ||
+            (typeof ed.language === "string" ? ed.language : ed.language?.code2) ||
+            null,
+          publisher: ed.publisher,
+          publicationDate: ed.publicationDate || ed.release_date,
+          pages: ed.pages,
+          coverUrl: ed.cover || ed.coverUrl,
+          country: ed.country || null,
+          countryCode: ed.countryCode || null,
+        }))
+      : undefined,
+  });
+}
+
 export async function getDetailsAggregate(
   input: BookDetailsInput
 ): Promise<NormalizedBookDetailsResponse> {
@@ -635,13 +982,7 @@ export async function getDetailsAggregate(
   try {
     localWork = await findCanonicalWork(input.slug);
     if (localWork) {
-      const primaryEdition = localWork.editions?.[0];
-
-      // When the request is for a specific non-English edition (identified by
-      // ISBN), we also require that edition-level translator data has been
-      // ingested before treating the cached work as complete.  Without this
-      // check, a work that was first ingested via the English slug path will
-      // always short-circuit here, never fetching the translator from Hardcover.
+      // Non-English ISBN requests still need translator data before short-circuit.
       const requestedIsbn = (() => {
         const v = input.slug.trim();
         const clean = v.replace(/[^0-9Xx]/g, "").toUpperCase();
@@ -659,36 +1000,9 @@ export async function getDetailsAggregate(
         !isNonEnglishEditionRequest ||
         (localWork.contributors || []).some((c: any) => c.role === "TRANSLATOR");
 
-      // Reject ISBNDB-only cached data.  ISBNDB frequently stores language as
-      // "und" (undetermined) and occasionally embeds the author name inside the
-      // title field.  We require:
-      //   a) the matched edition has a real language code (not null / "und"),
-      //   b) the work carries a rating or has an external ID from a primary
-      //      provider (Hardcover / Goodreads) — confirming it was verified by a
-      //      high-quality source.
-      const editionForLangCheck = matchedEditionByIsbn || primaryEdition;
-      const rawEditionLang = (editionForLangCheck as any)?.language ?? null;
-      const hasKnownLanguage =
-        rawEditionLang &&
-        rawEditionLang !== "und" &&
-        toIso639_1(rawEditionLang) != null;
-
-      const PRIMARY_PROVIDER_IDS = new Set(["hardcover", "goodreads", "goodreads-dataset"]);
-      const hasRatingOrPrimaryId =
-        localWork.averageRating != null ||
-        (localWork.externalIds || []).some((eid: any) =>
-          PRIMARY_PROVIDER_IDS.has(eid.provider)
-        );
-
-      const hasCompleteData =
-        localWork.translations?.some((t: any) => t.description?.trim()) &&
-        primaryEdition?.publisher &&
-        primaryEdition?.pages &&
-        hasEditionTranslators &&
-        hasKnownLanguage &&
-        hasRatingOrPrimaryId;
-
-      if (hasCompleteData) {
+      // Only short-circuit trusted, complete local rows (Hardcover / Goodreads
+      // dataset). ISBNDB-only poison never wins over a live Hardcover fetch.
+      if (isTrustedLocalDetailsComplete(localWork) && hasEditionTranslators) {
         return canonicalWorkToDetails(localWork, input.language, input.slug);
       }
     }
@@ -699,90 +1013,102 @@ export async function getDetailsAggregate(
   ensureProvidersConfigured();
 
   const providers = listAvailableProviders();
-  const primaryProviders = providers.filter((provider) => isPrimaryProvider(provider.id));
-  const backupProviders = providers.filter((provider) => !isPrimaryProvider(provider.id));
-  const primarySettled = await Promise.allSettled(primaryProviders.map((p) => p.getDetails(input)));
-  const primaryFulfilled = primarySettled
-    .map((res, idx) => ({ res, provider: primaryProviders[idx] }))
-    .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof primaryProviders)[number] } => item.res.status === "fulfilled");
+  const hardcoverProvider = providers.find((p) => p.id === "hardcover");
+  const backupProviders = providers.filter((p) => isBackupProvider(p.id));
 
-  // Detect the edition's target language BEFORE deciding whether to call
-  // backup providers.  When no explicit ?language= is given we infer it from
-  // the first primary response so that:
-  //   a) Pass A (native-language description search) actually runs, and
-  //   b) backup providers (ISBNDB, OpenLibrary) are included in that search
-  //      for non-English editions where they sometimes carry native synopses.
-  const firstPrimaryBook: any =
-    primaryFulfilled.length > 0
-      ? (primaryFulfilled[0].res.value.book || {})
-      : {};
+  // 1) Hardcover first — sole live structural authority.
+  let hardcoverResult: NormalizedBookDetailsResponse | null = null;
+  let hardcoverError: Error | null = null;
+  if (hardcoverProvider?.isAvailable()) {
+    try {
+      hardcoverResult = await hardcoverProvider.getDetails(input);
+    } catch (err) {
+      hardcoverError = err instanceof Error ? err : new Error(String(err));
+      console.warn(
+        `[DetailsAggregate] Hardcover details failed for "${input.slug}": ${hardcoverError.message}`
+      );
+    }
+  }
+
+  const hardcoverBook: any = hardcoverResult?.book || null;
   const targetIso: string | null = input.language
-    ? (toIso639_1(input.language) ?? null)
-    : (toIso639_1(
-        firstPrimaryBook.language ||
-        firstPrimaryBook.languageCode ||
-        firstPrimaryBook.edition?.language ||
-        ""
-      ) ?? null);
-  // For non-English editions, always call backup providers so Pass A can
-  // search ISBNDB / OpenLibrary responses for a native-language description.
-  // Without this, needsBackup is false whenever Hardcover returns a complete
-  // (English) record, and those providers are never queried.
+    ? toIso639_1(input.language) ?? null
+    : toIso639_1(
+        hardcoverBook?.languageCode ||
+          hardcoverBook?.language ||
+          hardcoverBook?.edition?.language ||
+          ""
+      ) ?? null;
+
+  // 2) Backups only when Hardcover is missing or missing critical gap fields
+  //    (or for non-English native synopsis search).
+  const hardcoverMissingCritical =
+    !hardcoverBook ||
+    !hardcoverBook.description ||
+    !(hardcoverBook.isbn || hardcoverBook.isbn13 || hardcoverBook.edition?.isbn) ||
+    !hardcoverBook.pages;
   const needsBackup =
-    (targetIso !== null && targetIso !== "en") ||
-    (primaryFulfilled.length > 0 &&
-      primaryFulfilled.some(({ res }) => {
-        const book: any = res.value.book || {};
-        return !book.description || !book.publisher || !book.pages || !(book.isbn || book.isbn13 || book.edition?.isbn);
-      }));
+    !hardcoverBook ||
+    hardcoverMissingCritical ||
+    (targetIso !== null && targetIso !== "en");
+
   const backupSettled = needsBackup
     ? await Promise.allSettled(backupProviders.map((p) => p.getDetails(input)))
     : [];
-  const settled = [...primarySettled, ...backupSettled];
-  const settledProviders = [...primaryProviders, ...(needsBackup ? backupProviders : [])];
+  const backupFulfilled = backupSettled
+    .map((res, idx) => ({ res, provider: backupProviders[idx] }))
+    .filter(
+      (
+        item
+      ): item is {
+        res: PromiseFulfilledResult<NormalizedBookDetailsResponse>;
+        provider: (typeof backupProviders)[number];
+      } => item.res.status === "fulfilled"
+    );
 
-  const fulfilled = settled
-    .map((res, idx) => ({ res, provider: settledProviders[idx] }))
-    .filter((item): item is { res: PromiseFulfilledResult<NormalizedBookDetailsResponse>; provider: (typeof settledProviders)[number] } => item.res.status === "fulfilled");
-
-  if (fulfilled.length === 0) {
-    const firstErr = settled.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
-    throw firstErr?.reason || new Error("No provider could resolve book details");
+  if (!hardcoverResult && backupFulfilled.length === 0 && !localWork) {
+    throw (
+      hardcoverError ||
+      (backupSettled.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined)
+        ?.reason ||
+      new Error("No provider could resolve book details")
+    );
   }
 
-  // Provider Priority Order: Primary providers (goodreads, hardcover) first, then Backup providers (isbndb, openlibrary)
-  const PROVIDER_PRIORITY: ProviderId[] = ["goodreads", "hardcover", "isbndb", "openlibrary"];
-  const sortedMatches = fulfilled.slice().sort((a, b) => {
-    return PROVIDER_PRIORITY.indexOf(a.provider.id) - PROVIDER_PRIORITY.indexOf(b.provider.id);
-  });
-  const primaryMatch = sortedMatches[0];
-  const otherMatches = fulfilled.filter((item) => item !== primaryMatch);
-
-  const primaryBook: any = primaryMatch.res.value.book || {};
-  const mergedBook: Record<string, unknown> = { ...primaryBook };
-
-  // 1. Description / Synopsis: Multi-vendor resolution with language prioritization & fallback
-  // targetIso was computed early (before the backup-provider decision) so it
-  // could drive the needsBackup check.  It already incorporates the edition
-  // language auto-detection when no ?language= param was supplied.
+  // 3) Description: prefer target-language text, then Hardcover, then backups.
   let description: string | null = null;
+  const descriptionCandidates: Array<{ book: any; providerId: string }> = [];
+  if (hardcoverBook) {
+    descriptionCandidates.push({ book: hardcoverBook, providerId: "hardcover" });
+  }
+  for (const item of backupFulfilled) {
+    descriptionCandidates.push({
+      book: item.res.value.book || {},
+      providerId: item.provider.id,
+    });
+  }
+  if (localWork) {
+    descriptionCandidates.push({
+      book: {
+        description: localWork.translations?.find((t: any) => t.description)?.description,
+        translations: localWork.translations,
+      },
+      providerId: "canonical",
+    });
+  }
 
-  // Pass A: Search for target language description across ALL fulfilled provider responses
-  // (includes backup providers like ISBNDB / OpenLibrary that were fetched for
-  // non-English editions so they can contribute native-language synopses)
   if (targetIso) {
-    for (const m of fulfilled) {
-      const b: any = m.res.value.book || {};
+    for (const { book } of descriptionCandidates) {
       if (
-        typeof b.description === "string" &&
-        b.description.trim() &&
-        isTextInLanguage(b.description, targetIso)
+        typeof book.description === "string" &&
+        book.description.trim() &&
+        isTextInLanguage(book.description, targetIso)
       ) {
-        description = b.description.trim();
+        description = book.description.trim();
         break;
       }
-      if (Array.isArray(b.translations)) {
-        const transMatch = b.translations.find(
+      if (Array.isArray(book.translations)) {
+        const transMatch = book.translations.find(
           (t: any) =>
             typeof t.description === "string" &&
             t.description.trim() &&
@@ -795,281 +1121,222 @@ export async function getDetailsAggregate(
       }
     }
   }
-
-  // Pass A2: If target language description is missing, query backup providers (ISBNDB)
-  // for sibling edition ISBNs belonging to the same Work!
-  if (!description && targetIso && targetIso !== "en") {
-    const candidateIsbns = new Set<string>();
-    const gatherIsbns = (edList: any[]) => {
-      if (!Array.isArray(edList)) return;
-      for (const ed of edList) {
-        const isbnStr = ed?.isbn13 || ed?.isbn || ed?.isbn10;
-        if (typeof isbnStr === "string" && isbnStr.trim() && isbnStr.trim() !== input.slug) {
-          candidateIsbns.add(isbnStr.trim());
-        }
-      }
-    };
-
-    if (firstPrimaryBook) {
-      gatherIsbns(firstPrimaryBook.editions);
-      if (firstPrimaryBook.matchedEdition) gatherIsbns([firstPrimaryBook.matchedEdition]);
-    }
-    if (localWork) {
-      gatherIsbns(localWork.editions);
-    }
-
-    const isbnsToQuery = Array.from(candidateIsbns).slice(0, 3);
-    for (const sibIsbn of isbnsToQuery) {
-      for (const bp of backupProviders) {
-        try {
-          const sibRes = await bp.getDetails({ slug: sibIsbn, editionId: input.editionId, language: input.language });
-          const sibBook: any = sibRes?.book || {};
-          if (
-            typeof sibBook.description === "string" &&
-            sibBook.description.trim() &&
-            isTextInLanguage(sibBook.description, targetIso)
-          ) {
-            description = sibBook.description.trim();
-            upsertCanonicalWorkFromProvider({
-              provider: bp.id,
-              providerWorkId: String(sibBook.id || sibIsbn),
-              title: String(sibBook.title || ""),
-              authorName: typeof sibBook.author === "string" ? sibBook.author : undefined,
-              description: description,
-              language: targetIso,
-              isbn13: sibBook.isbn || sibBook.isbn13,
-              isbn10: sibBook.isbn10,
-              coverUrl: sibBook.cover,
-            }).catch((err) => console.warn(`[Aggregate] Sibling backup ingest error:`, err));
-            break;
-          }
-        } catch (err) {
-          // Ignore individual sibling edition query errors
-        }
-      }
-      if (description) break;
-    }
-  }
-
-  // Pass B: Fall back to primary description or any available vendor description if target language description missing
   if (!description) {
-    description = typeof primaryBook.description === "string" && primaryBook.description.trim()
-      ? primaryBook.description.trim()
-      : null;
-
-    if (!description) {
-      for (const m of fulfilled) {
-        const b: any = m.res.value.book || {};
-        if (typeof b.description === "string" && b.description.trim()) {
-          description = b.description.trim();
-          break;
-        }
-        if (Array.isArray(b.translations)) {
-          const transMatch = b.translations.find(
-            (t: any) => typeof t.description === "string" && t.description.trim()
-          );
-          if (transMatch) {
-            description = transMatch.description.trim();
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  const detectedDescLang = description
-    ? (isTextInLanguage(description, "en") ? "en" : targetIso || "en")
-    : null;
-  const bookLangForFallbackCheck = targetIso || toIso639_1(primaryBook.language || primaryBook.languageCode || "") || null;
-  const descriptionIsLanguageFallback = Boolean(
-    bookLangForFallbackCheck &&
-      detectedDescLang &&
-      detectedDescLang !== bookLangForFallbackCheck
-  );
-
-  mergedBook.description = description;
-  mergedBook.descriptionLanguage = detectedDescLang;
-  mergedBook.isLanguageFallback = descriptionIsLanguageFallback;
-
-  // 2. Publication Date
-  let publicationDate = primaryBook.publicationDate || primaryBook.publishDate;
-  if (!publicationDate) {
-    for (const m of otherMatches) {
-      const d = (m.res.value.book as any)?.publicationDate || (m.res.value.book as any)?.publishDate;
-      if (d) {
-        publicationDate = d;
+    for (const { book } of descriptionCandidates) {
+      if (typeof book.description === "string" && book.description.trim()) {
+        description = book.description.trim();
         break;
       }
     }
   }
-  mergedBook.publicationDate = publicationDate || null;
+  if (description) {
+    description = stripAlternateCoverNotes(description);
+    if (!description.trim()) description = null;
+  }
 
-  // 3. Publisher
-  let publisher = primaryBook.publisher || primaryBook.publishedBy;
-  if (!publisher) {
-    for (const m of otherMatches) {
-      const pub = (m.res.value.book as any)?.publisher || (m.res.value.book as any)?.publishedBy;
-      if (pub) {
-        publisher = pub;
-        break;
+  // 4) Ingest: Hardcover structural write first (repairs poison), then gap-fill only.
+  if (hardcoverBook) {
+    try {
+      await ingestDetailsBook("hardcover", input, hardcoverBook, {
+        descriptionOverride: description,
+      });
+    } catch (err) {
+      console.error("Canonical hardcover detail ingest error:", err);
+    }
+  }
+
+  for (const item of backupFulfilled) {
+    const b: any = item.res.value.book || {};
+    // Never let backups define identity when Hardcover already resolved the work.
+    if (hardcoverBook) {
+      const needsGap =
+        !(hardcoverBook.pages || hardcoverBook.edition?.pages) ||
+        !(hardcoverBook.publisher || hardcoverBook.publishedBy) ||
+        !(hardcoverBook.cover || hardcoverBook.coverUrl || hardcoverBook.image) ||
+        !description;
+      if (!needsGap) continue;
+      try {
+        await ingestDetailsBook(item.provider.id, input, b, {
+          gapFillOnly: true,
+          descriptionOverride: description && !hardcoverBook.description ? description : undefined,
+        });
+      } catch (err) {
+        console.error(`Canonical backup detail ingest error (${item.provider.id}):`, err);
+      }
+    } else {
+      try {
+        await ingestDetailsBook(item.provider.id, input, b, {
+          descriptionOverride: description,
+        });
+      } catch (err) {
+        console.error(`Canonical backup detail ingest error (${item.provider.id}):`, err);
       }
     }
   }
-  mergedBook.publisher = publisher || null;
-  mergedBook.publishedBy = publisher || null;
 
-  // 4. Language
-  let language = targetIso || primaryBook.language;
-  if (!language) {
-    for (const m of otherMatches) {
-      const l = (m.res.value.book as any)?.language;
-      if (l) {
-        language = l;
-        break;
-      }
-    }
-  }
-  mergedBook.language = language || null;
-
-  // 5. Pages & Audio Length
-  let pages = primaryBook.pages;
-  if (!pages) {
-    for (const m of otherMatches) {
-      const pg = (m.res.value.book as any)?.pages;
-      if (pg) {
-        pages = pg;
-        break;
-      }
-    }
-  }
-  mergedBook.pages = pages || null;
-
-  let audioLength = primaryBook.audioLength;
-  let audioLengthMinutes = primaryBook.audioLengthMinutes;
-  if (!audioLength) {
-    for (const m of otherMatches) {
-      const al = (m.res.value.book as any)?.audioLength;
-      const alm = (m.res.value.book as any)?.audioLengthMinutes;
-      if (al || alm) {
-        audioLength = al;
-        audioLengthMinutes = alm;
-        break;
-      }
-    }
-  }
-  mergedBook.audioLength = audioLength || null;
-  mergedBook.audioLengthMinutes = audioLengthMinutes || null;
-
-  // 5b. Contributors by role
-  mergedBook.translators = primaryBook.translators || fulfilled.flatMap((m) => (m.res.value.book as any)?.translators || []).filter(Boolean);
-  mergedBook.illustrators = primaryBook.illustrators || fulfilled.flatMap((m) => (m.res.value.book as any)?.illustrators || []).filter(Boolean);
-  mergedBook.narrators = primaryBook.narrators || fulfilled.flatMap((m) => (m.res.value.book as any)?.narrators || []).filter(Boolean);
-  mergedBook.editors = primaryBook.editors || fulfilled.flatMap((m) => (m.res.value.book as any)?.editors || []).filter(Boolean);
-
-  // 6. Genres / Categories: Combine all genres, normalize, rank, and cap to top 5
-  const rawGenresList: string[] = fulfilled.flatMap((m) => (m.res.value.book as any)?.genres || []);
-  const cleanGenres = normalizeAndRankCategories(rawGenresList, 5);
-  mergedBook.genres = cleanGenres;
-
-  // 7. Cover Priority: Hardcover > Other services > Goodreads (last resort)
-  const allCovers = fulfilled.flatMap((m) => {
-    const b: any = m.res.value.book || {};
-    return [b.cover, b.coverUrl, b.image, b.matchedEdition?.cover];
-  });
-  mergedBook.cover = pickBestCoverUrl([primaryBook.cover, primaryBook.coverUrl, ...allCovers]);
-
-  // Synchronous background ingest into Prisma Canonical store
-  await Promise.all(
-    fulfilled.map(async (m) => {
-      const b: any = m.res.value.book;
-      if (b) {
-        const primaryAuthorName = typeof b.author === "string"
-          ? b.author
-          : Array.isArray(b.author)
-            ? b.author[0]?.name
-            : b.author?.name;
-        await upsertCanonicalWorkFromProvider({
-          provider: m.provider.id,
-          providerWorkId: String(b.id || input.slug),
-          title: String(b.title || ""),
-          originalTitle: b.originalTitle || b.workTitle,
-          authorName: primaryAuthorName,
-          description: String(mergedBook.description || b.description || ""),
-          language: String(b.language || b.languageCode || targetIso || input.language || ""),
-          publicationYear: b.publicationYear || b.originalPublicationYear,
-          publicationDate: String(mergedBook.publicationDate || b.publicationDate || b.publishDate || ""),
-          publisher: String(mergedBook.publisher || b.publishedBy || b.publisher || b.edition?.publisher || ""),
-          pages: typeof mergedBook.pages === "number" ? mergedBook.pages : (b.pages || b.edition?.pages),
-          audioLengthMinutes: typeof mergedBook.audioLengthMinutes === "number" ? (mergedBook.audioLengthMinutes as number) : (b.audioLengthMinutes || b.edition?.audioLengthMinutes),
-          isbn10: b.isbn10 || b.edition?.isbn10,
-          isbn13: b.isbn13 || b.isbn || b.edition?.isbn,
-          asin: b.asin || b.edition?.asin,
-          format: b.type || b.bookEdition || b.format || b.edition?.format,
-          coverUrl: b.coverUrl || b.cover || b.image,
-          rating: typeof b.rating === "number" ? b.rating : (typeof b.rating === "string" ? parseFloat(b.rating) || undefined : undefined),
-          ratingsCount: b.ratingsCount,
-          genres: cleanGenres,
-          seriesName: typeof b.series === "string" ? b.series.replace(/\s*#\d+.*$/, "") : (b.series?.name || b.seriesName),
-          seriesPosition: b.series?.position || b.seriesPosition,
-          translators: normalizeTranslatorList(b.translators),
-          illustrators: normalizeTranslatorList(b.illustrators),
-          narrators: normalizeTranslatorList(b.narrators),
-          editions: Array.isArray(b.editions)
-            ? b.editions.map((ed: any) => ({
-                isbn10: ed.isbn10 || ed.isbn_10,
-                isbn13: ed.isbn || ed.isbn13 || ed.isbn_13,
-                asin: ed.asin,
-                title: ed.title,
-                format: ed.format || ed.edition_format,
-                language: ed.language,
-                publicationDate: ed.publicationDate || ed.release_date,
-                coverUrl: ed.cover || ed.coverUrl,
-              }))
-            : undefined,
-        }).catch((err) => console.error("Canonical detail ingest error:", err));
-      }
-    })
-  );
-
+  // 5) Prefer re-read of the repaired canonical row for a stable response shape.
   try {
     const freshWork = await findCanonicalWork(input.slug);
     if (freshWork) {
       const result = canonicalWorkToDetails(freshWork, input.language, input.slug);
-      // Safety net: canonicalWorkToDetails may return null description when
-      // the English synopsis could not be stored in the non-English
-      // WorkTranslation row (the merger's language-validation check rejects
-      // cross-language content).  When the live provider fetch produced a
-      // description, surface it here so callers always get a synopsis.
-      if (!(result.book as any).description && mergedBook.description) {
-        const desc = mergedBook.description as string;
-        const detectedDescLang =
-          (mergedBook as any).descriptionLanguage ||
-          (isTextInLanguage(desc, "en") ? "en" : (result.book as any).language) ||
-          null;
-        const editionLang =
-          (result.book as any).languageCode ||
-          (result.book as any).language ||
-          null;
-        (result.book as any).description = desc;
-        (result.book as any).descriptionLanguage = detectedDescLang;
-        (result.book as any).isLanguageFallback = Boolean(
-          editionLang &&
-            detectedDescLang &&
-            detectedDescLang !== editionLang
+      const book = result.book as any;
+
+      // Overlay live Hardcover structural fields when the re-read is still thin
+      // (e.g. race on async cover rows) so clients never see ISBNDB identity.
+      if (hardcoverBook) {
+        const hcWorkTitle =
+          hardcoverBook.workTitle || hardcoverBook.title || null;
+        if (hardcoverBook.title && typeof hardcoverBook.title === "string") {
+          book.title = hardcoverBook.title;
+        }
+        if (hcWorkTitle) {
+          book.canonicalTitle = hcWorkTitle;
+        }
+        const hcAuthor = extractPrimaryAuthorName(hardcoverBook.author);
+        if (hcAuthor) {
+          book.author = hcAuthor;
+          book.authors = Array.isArray(hardcoverBook.author)
+            ? hardcoverBook.author
+                .filter((a: any) => a?.name)
+                .map((a: any, i: number) => ({
+                  id: String(a.id ?? i),
+                  name: a.name,
+                  role: "AUTHOR",
+                }))
+            : [{ id: "0", name: hcAuthor, role: "AUTHOR" }];
+        }
+        if (hardcoverBook.rating != null) {
+          const n =
+            typeof hardcoverBook.rating === "number"
+              ? hardcoverBook.rating
+              : parseFloat(String(hardcoverBook.rating));
+          if (Number.isFinite(n)) book.rating = roundRating(n);
+        }
+        if (hardcoverBook.ratingCount != null && hardcoverBook.ratingCount !== "") {
+          const count = parseInt(String(hardcoverBook.ratingCount), 10);
+          if (Number.isFinite(count)) book.ratingsCount = count;
+        }
+        const hcSeries = parseSeriesLabel(
+          typeof hardcoverBook.series === "string" ? hardcoverBook.series : null
+        );
+        if (hcSeries.name) {
+          if (!Array.isArray(book.series) || book.series.length === 0) {
+            book.series = [
+              {
+                id: hardcoverBook.seriesURL || hcSeries.name,
+                slug:
+                  typeof hardcoverBook.seriesURL === "string"
+                    ? hardcoverBook.seriesURL.split("/").pop() || null
+                    : null,
+                name: hcSeries.name,
+                position: hcSeries.position,
+                isPrimary: true,
+              },
+            ];
+          } else if (hcSeries.position != null) {
+            // Fill null positions left by the Goodreads import (always NULL).
+            book.series = book.series.map((entry: any) => {
+              const sameName =
+                normalizeSearchText(entry?.name || "") ===
+                normalizeSearchText(hcSeries.name || "");
+              if (sameName && (entry.position == null || entry.position === "")) {
+                return { ...entry, position: hcSeries.position };
+              }
+              return entry;
+            });
+          }
+        }
+        if (book.matchedEdition && hardcoverBook.asin) {
+          book.matchedEdition.asin =
+            book.matchedEdition.asin || hardcoverBook.asin || hardcoverBook.edition?.asin || null;
+        }
+        if (book.matchedEdition) {
+          if (hardcoverBook.country && !book.matchedEdition.country) {
+            book.matchedEdition.country = hardcoverBook.country;
+          }
+          if (hardcoverBook.countryCode && !book.matchedEdition.countryCode) {
+            book.matchedEdition.countryCode = hardcoverBook.countryCode;
+          }
+          if (
+            hardcoverBook.type ||
+            hardcoverBook.bookEdition ||
+            hardcoverBook.edition?.format
+          ) {
+            book.matchedEdition.format = toApiBookFormat(
+              hardcoverBook.type ||
+                hardcoverBook.bookEdition ||
+                hardcoverBook.edition?.format
+            );
+          }
+        }
+        if (hardcoverBook.country && !book.country) book.country = hardcoverBook.country;
+        if (hardcoverBook.countryCode && !book.countryCode) {
+          book.countryCode = hardcoverBook.countryCode;
+        }
+        if (Array.isArray(book.editions) && hardcoverBook.asin) {
+          book.editions = book.editions.map((ed: any) => ({
+            ...ed,
+            asin: ed.asin || hardcoverBook.asin || hardcoverBook.edition?.asin || null,
+          }));
+        }
+        const hcCover =
+          hardcoverBook.cover || hardcoverBook.coverUrl || hardcoverBook.edition?.cover;
+        if (hcCover && book.matchedEdition) {
+          const current = book.matchedEdition.cover || "";
+          if (!current || current.includes("isbndb.com") || isGoodreadsCoverUrl(current)) {
+            book.matchedEdition.cover = hcCover;
+          }
+        }
+        if (Array.isArray(hardcoverBook.genres) && hardcoverBook.genres.length > 0) {
+          book.genres = normalizeAndRankCategories(hardcoverBook.genres, 5);
+        }
+      }
+
+      if (!book.description && description) {
+        book.description = description;
+        book.descriptionLanguage = isTextInLanguage(description, "en")
+          ? "en"
+          : targetIso || null;
+        book.isLanguageFallback = Boolean(
+          targetIso &&
+            book.descriptionLanguage &&
+            book.descriptionLanguage !== targetIso
         );
       }
       return result;
     }
   } catch (freshErr) {
-    // Continue with mergedBook if fresh lookup fails
+    console.error("Fresh canonical details re-read failed:", freshErr);
   }
 
-  return {
-    success: true,
-    provider: "aggregate",
-    scrapedURL: primaryMatch.res.value.scrapedURL,
-    book: mergedBook,
-  };
+  // 6) Fallbacks when DB re-read is unavailable.
+  if (localWork && isTrustedLocalDetailsComplete(localWork)) {
+    return canonicalWorkToDetails(localWork, input.language, input.slug);
+  }
+  if (hardcoverResult) {
+    return {
+      success: true,
+      provider: "aggregate",
+      scrapedURL: hardcoverResult.scrapedURL,
+      book: {
+        ...hardcoverBook,
+        description: description || hardcoverBook.description,
+        provider: "hardcover",
+      },
+    };
+  }
+  if (backupFulfilled.length > 0) {
+    const first = backupFulfilled[0];
+    return {
+      ...first.res.value,
+      provider: "aggregate",
+    };
+  }
+  if (localWork) {
+    return canonicalWorkToDetails(localWork, input.language, input.slug);
+  }
+
+  throw hardcoverError || new Error("No provider could resolve book details");
 }
 
 export async function searchByProviderId(
@@ -1151,8 +1418,7 @@ export async function getCoversAggregate(
           publicationDate: edition.publicationDate,
           pages: edition.pages,
           publisher: edition.publisher,
-          language: edition.language,
-          languageCode: edition.language,
+          ...languageFields(edition.language),
           country: null,
           countryCode: null,
           isDefault: cover.isDefault,

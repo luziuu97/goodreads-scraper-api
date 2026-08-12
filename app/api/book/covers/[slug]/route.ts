@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
-import { getBookCoversByProvider, parseProvider } from "@/lib/v0/book-providers";
+import { getBookCoversByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_COVER,
@@ -66,7 +66,7 @@ export async function GET(
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100)
       : 50;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 100)) {
       return NextResponse.json(
         { success: false, error: "Invalid limit parameter. Must be a number between 1 and 100" },
         { status: 400 }
@@ -78,7 +78,7 @@ export async function GET(
       slug: decodedSlug,
       limit,
       onlyWithCover: onlyWithCover ? "1" : "0",
-    }, "v0");
+    });
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {

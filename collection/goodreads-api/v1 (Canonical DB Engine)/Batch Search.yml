@@ -5,7 +5,7 @@ info:
 
 http:
   method: POST
-  url: "{{url}}/api/v1/book/batch-search"
+  url: "{{url}}/api/book/batch-search"
   headers:
     - name: Content-Type
       value: application/json

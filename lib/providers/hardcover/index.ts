@@ -1,4 +1,5 @@
 import { getHardcoverApiToken } from "@/lib/api-config";
+import { parseSeriesLabel } from "@/lib/canonical/authority";
 import { upsertCanonicalWorkFromProvider } from "@/lib/canonical/merger";
 import {
   fetchHardcoverBookCovers,
@@ -38,11 +39,15 @@ export const hardcoverProvider: BookDataProvider = {
       author: book.author,
       cover: book.cover,
       rating: book.rating,
+      readersCount: book.readersCount,
+      ratingsCount: book.ratingsCount,
       publicationDate: book.publicationDate,
       genres: book.genres,
       language: book.language,
       languageCode: book.languageCode,
       translators: book.translators,
+      illustrators: book.illustrators,
+      narrators: book.narrators,
       presentation: book.presentation,
       edition: book.edition,
       editions: book.editions,
@@ -91,30 +96,81 @@ export const hardcoverProvider: BookDataProvider = {
 
     const b = details.book as Record<string, any>;
     if (b && (b.id || input.slug)) {
-      upsertCanonicalWorkFromProvider({
-        provider: "hardcover",
-        providerWorkId: String(b.id || input.slug),
-        title: String(b.title || b.canonicalTitle || ""),
-        originalTitle: b.canonicalTitle || b.workTitle,
-        authorName: typeof b.author === "string" ? b.author : Array.isArray(b.author) ? b.author[0]?.name : b.author?.name,
-        description: String(b.description || ""),
-        language: String(b.language || b.languageCode || ""),
-        publicationYear: b.publicationYear,
-        publicationDate: String(b.publicationDate || b.publishDate || ""),
-        publisher: String(b.publishedBy || b.publisher || ""),
-        pages: typeof b.pages === "number" ? b.pages : undefined,
-        isbn10: b.isbn10,
-        isbn13: b.isbn,
-        asin: b.asin,
-        format: b.type || b.bookEdition || b.format,
-        coverUrl: b.coverUrl || b.cover || b.image,
-        rating: typeof b.rating === "number" ? b.rating : (typeof b.rating === "string" ? parseFloat(b.rating) || undefined : undefined),
-        ratingsCount: typeof b.ratingsCount === "number" ? b.ratingsCount : (parseInt(b.ratingCount || b.ratings_count || b.users_count, 10) || undefined),
-        reviewsCount: typeof b.reviewsCount === "number" ? b.reviewsCount : (parseInt(b.reviewsCount || b.reviews_count, 10) || undefined),
-        genres: b.genres,
-        seriesName: typeof b.series === "string" ? b.series.replace(/\s*#\d+.*$/, "") : (b.series?.name || b.seriesName),
-        seriesPosition: b.series?.position || b.seriesPosition,
-      }).catch((err) => console.warn(`[Hardcover] Canonical getDetails upsert error:`, err));
+      const seriesRaw =
+        typeof b.series === "string"
+          ? b.series
+          : b.series?.name || b.seriesName || null;
+      const parsedSeries = parseSeriesLabel(
+        typeof seriesRaw === "string" ? seriesRaw : null
+      );
+      const seriesName =
+        parsedSeries.name ||
+        (typeof b.series === "string"
+          ? b.series.replace(/\s*#\d+.*$/, "").trim()
+          : b.series?.name || b.seriesName) ||
+        null;
+      const seriesPosition =
+        b.series?.position ??
+        b.seriesPosition ??
+        parsedSeries.position ??
+        null;
+      const authorName =
+        typeof b.author === "string"
+          ? b.author
+          : Array.isArray(b.author)
+            ? b.author[0]?.name
+            : b.author?.name;
+
+      // Full structural ingest (including sibling editions). Awaited so aggregate
+      // callers never race a partial fire-and-forget write that omits format/country.
+      try {
+        await upsertCanonicalWorkFromProvider({
+          provider: "hardcover",
+          providerWorkId: String(b.id || input.slug),
+          title: String(b.title || b.canonicalTitle || ""),
+          originalTitle: b.canonicalTitle || b.workTitle || b.title,
+          authorName,
+          description: String(b.description || ""),
+          language: String(b.languageCode || b.language || ""),
+          publicationYear: b.publicationYear,
+          publicationDate: String(b.publicationDate || b.publishDate || ""),
+          publisher: String(b.publishedBy || b.publisher || ""),
+          pages: typeof b.pages === "number" ? b.pages : undefined,
+          isbn10: b.isbn10 || b.edition?.isbn10,
+          isbn13: b.isbn || b.edition?.isbn,
+          asin: b.asin || b.edition?.asin,
+          format: b.type || b.bookEdition || b.format || b.edition?.format,
+          coverUrl: b.coverUrl || b.cover || b.image || b.edition?.cover,
+          country: b.country || b.edition?.country || null,
+          countryCode: b.countryCode || b.edition?.countryCode || null,
+          providerEditionId: b.edition?.id != null ? String(b.edition.id) : undefined,
+          rating: typeof b.rating === "number" ? b.rating : (typeof b.rating === "string" ? parseFloat(b.rating) || undefined : undefined),
+          ratingsCount: typeof b.ratingsCount === "number" ? b.ratingsCount : (parseInt(b.ratingCount || b.ratings_count || b.users_count, 10) || undefined),
+          reviewsCount: typeof b.reviewsCount === "number" ? b.reviewsCount : (parseInt(b.reviewsCount || b.reviews_count, 10) || undefined),
+          genres: b.genres,
+          seriesName,
+          seriesPosition: typeof seriesPosition === "number" ? seriesPosition : undefined,
+          editions: Array.isArray(b.editions)
+            ? b.editions.map((ed: any) => ({
+                providerEditionId: ed.id != null ? String(ed.id) : undefined,
+                isbn10: ed.isbn10,
+                isbn13: ed.isbn || ed.isbn13,
+                asin: ed.asin,
+                title: ed.title,
+                format: ed.format,
+                language: ed.languageCode || ed.language,
+                publisher: ed.publisher,
+                publicationDate: ed.publicationDate,
+                pages: ed.pages,
+                coverUrl: ed.cover,
+                country: ed.country,
+                countryCode: ed.countryCode,
+              }))
+            : undefined,
+        });
+      } catch (err) {
+        console.warn(`[Hardcover] Canonical getDetails upsert error:`, err);
+      }
     }
 
     return {

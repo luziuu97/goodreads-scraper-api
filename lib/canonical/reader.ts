@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/db";
-import { formatAudioLength, htmlToMarkdown, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, normalizeBookFormat, normalizeAndRankCategories, selectBestCover, normalizeLanguage, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
+import { collapseAuthorFragments } from "@/lib/canonical/authority";
+import { formatAudioLength, htmlToMarkdown, isCompilationOrDerivativeTitle, isIgnoredAuthor, isTextInLanguage, normalizeAuthorSlug, toApiBookFormat, normalizeAndRankCategories, selectBestCover, normalizeSearchText, normalizeValidIsbn, roundRating, pickBestCoverUrl } from "@/lib/canonical/constants";
+import { languageFields, toIso639_1 } from "@/lib/languages";
 import type {
   BookSearchInput,
   NormalizedBookDetailsResponse,
@@ -132,6 +134,74 @@ function detectQueryLanguageMatch(work: any, query?: string): string | undefined
   return undefined;
 }
 
+function toIsoTimestamp(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string" && value.trim()) return value;
+  return null;
+}
+
+function toPublicCovers(edition: any) {
+  return (edition?.covers || []).map((cover: any) => ({
+    id: cover.id,
+    editionId: cover.editionId || edition.id,
+    provider: cover.provider,
+    url: cover.url,
+    width: cover.width ?? null,
+    height: cover.height ?? null,
+    pixelCount: cover.pixelCount ?? null,
+    imageFormat: cover.imageFormat ?? null,
+    isDefault: Boolean(cover.isDefault),
+  }));
+}
+
+function toPublicProviderMappings(edition: any, workId: string) {
+  return (edition?.externalIds || edition?.providerMappings || []).map((item: any) => ({
+    id: item.id,
+    provider: item.provider,
+    providerWorkId: item.providerWorkId ?? item.externalId ?? null,
+    providerEditionId: item.providerEditionId ?? null,
+    workId: item.workId ?? workId,
+    editionId: item.editionId ?? edition.id,
+  }));
+}
+
+function toPublicEdition(edition: any, workId: string, includeOpenLibraryFallback = false) {
+  const edIsbn = edition.isbn13 || edition.isbn10;
+  const olCover =
+    includeOpenLibraryFallback && edIsbn
+      ? `https://covers.openlibrary.org/b/isbn/${edIsbn.replace(/[^0-9Xx]/g, "").toUpperCase()}-L.jpg`
+      : undefined;
+  const coverCandidates = [
+    edition.cover,
+    ...(edition.covers?.map((c: any) => c.url) || []),
+    ...(olCover ? [olCover] : []),
+  ];
+  return {
+    id: edition.id,
+    workId: edition.workId || workId,
+    title: edition.title,
+    format: toApiBookFormat(edition.format),
+    language: toIso639_1(edition.language) || "und",
+    languageCode: toIso639_1(edition.language) || "und",
+    isbn13: edition.isbn13,
+    isbn10: edition.isbn10,
+    asin: edition.asin,
+    publisher: edition.publisher,
+    publicationDate: edition.publicationDate,
+    pages: edition.pages,
+    audioLengthMinutes: edition.audioLengthMinutes,
+    country: edition.country || null,
+    countryCode: edition.countryCode || null,
+    isDefault: Boolean(edition.isDefault),
+    createdAt: toIsoTimestamp(edition.createdAt),
+    updatedAt: toIsoTimestamp(edition.updatedAt),
+    cover: pickBestCoverUrl(coverCandidates) || "",
+    covers: toPublicCovers(edition),
+    providerMappings: toPublicProviderMappings(edition, workId),
+  };
+}
+
 function buildAllCoverCandidates(work: any): Array<{ url: string; provider?: string }> {
   const candidates: Array<{ url: string; provider?: string }> = [];
 
@@ -208,12 +278,12 @@ export function canonicalWorkToSearchBook(
         ...(edOlCandidate ? [{ url: edOlCandidate, provider: "openlibrary" }] : []),
       ];
       const edCoverObj = selectBestCover(edCoverCandidates);
-      const edLang = normalizeLanguage(ed.language);
+      const edLang = languageFields(ed.language);
       return {
         isbn: ed.isbn13 ?? null,
         isbn10: ed.isbn10 ?? null,
-        language: edLang,
-        format: ed.format?.toLowerCase() ?? null,
+        language: edLang.languageCode,
+        format: toApiBookFormat(ed.format),
         publicationDate: ed.publicationDate ?? null,
         cover: edCoverObj?.url || undefined,
       };
@@ -231,7 +301,9 @@ export function canonicalWorkToSearchBook(
   }
   const displayTitle = rawTitle.replace(/\s*\([^)]*#\d+[^)]*\)/gi, "").trim() || rawTitle;
 
-  const resolvedLang = normalizeLanguage(edition?.language || effectiveLang || work.originalLanguage);
+  const resolvedLang = languageFields(
+    edition?.language || effectiveLang || work.originalLanguage
+  );
 
   return {
     id: work.id,
@@ -241,6 +313,9 @@ export function canonicalWorkToSearchBook(
     author: author?.name || "Unknown Author",
     cover: coverObj?.url || "",
     rating: roundRating(work.averageRating) ?? undefined,
+    // Do NOT map ratingsCount → readersCount. Goodreads ratings are millions;
+    // Hardcover users_count is thousands. Mixing them breaks popularity floors.
+    ratingsCount: work.ratingsCount ?? undefined,
     publicationDate:
       edition?.publicationDate || (work.publicationYear ? String(work.publicationYear) : undefined),
     genres: normalizeAndRankCategories(
@@ -249,8 +324,8 @@ export function canonicalWorkToSearchBook(
     ),
     isbn: edition?.isbn13 || edition?.isbn10 || null,
     isbn10: edition?.isbn10 || null,
-    language: resolvedLang,
-    languageCode: resolvedLang,
+    language: resolvedLang.language,
+    languageCode: resolvedLang.languageCode,
     presentation: isbn ? "isbn" : edition ? "edition" : "work",
     sources: (work.externalIds || []).map((item: any) => ({
       title: item.provider,
@@ -264,14 +339,13 @@ export function canonicalWorkToSearchBook(
           isbn: edition.isbn13,
           isbn10: edition.isbn10,
           asin: edition.asin,
-          format: edition.format,
+          format: toApiBookFormat(edition.format),
           publicationDate: edition.publicationDate,
           pages: edition.pages,
           publisher: edition.publisher,
-          language: normalizeLanguage(edition.language),
-          languageCode: normalizeLanguage(edition.language),
-          country: null,
-          countryCode: null,
+          ...languageFields(edition.language),
+          country: edition.country || null,
+          countryCode: edition.countryCode || null,
           cover: editionCoverObj?.url || "",
         }
       : undefined,
@@ -309,11 +383,18 @@ export async function searchCanonicalBooks(
         ? titleMatch
         : { OR: [titleMatch, authorMatch] };
 
+  // When a language is requested we over-fetch, then keep works that can present
+  // in that language. A small take would otherwise fill with English-only hits
+  // that get discarded (e.g. "harry potter" + language=es → only 3 series books).
+  const fetchTake = input.language
+    ? Math.min(Math.max(input.limit * 15, 80), 250)
+    : Math.min(Math.max(input.limit * 5, input.limit), 250);
+
   const works = await prisma.work.findMany({
     where,
     include: workInclude,
     orderBy: [{ ratingsCount: "desc" }, { averageRating: "desc" }],
-    take: Math.min(Math.max(input.limit * 5, input.limit), 250),
+    take: fetchTake,
   });
 
   if (isbn && new Set(works.map((work) => work.id)).size > 1) {
@@ -324,18 +405,58 @@ export async function searchCanonicalBooks(
     return [];
   }
 
-  return works
+  const targetLang = input.language ? toIso639_1(input.language) : null;
+
+  let mapped = works
     .map((work) => canonicalWorkToSearchBook(work, input.language, isbn, query))
+    .filter(
+      (book) => !isCompilationOrDerivativeTitle(book.title, book.workTitle)
+    );
+
+  // Strict language presentation when requested: only works that resolved to
+  // an edition in that language.
+  if (targetLang) {
+    mapped = mapped.filter(
+      (book) => toIso639_1(book.languageCode || book.language) === targetLang
+    );
+  }
+
+  // Prefer primary novels over empty leftover lists when everything was filtered.
+  const pool =
+    mapped.length > 0
+      ? mapped
+      : targetLang
+        ? []
+        : works.map((work) =>
+            canonicalWorkToSearchBook(work, input.language, isbn, query)
+          );
+
+  return pool
     .sort((a, b) => {
       const score = (book: NormalizedSearchBook) => {
         const title = normalizeSearchText(book.title);
         const workTitle = normalizeSearchText(book.workTitle);
-        if (title === normalizedQuery || workTitle === normalizedQuery) return 1000;
+        const strip = (value: string) => value.replace(/^(the|a|an)\s+/, "");
+        if (
+          title === normalizedQuery ||
+          workTitle === normalizedQuery ||
+          strip(title) === normalizedQuery ||
+          strip(workTitle) === normalizedQuery
+        ) {
+          return 1000;
+        }
         if (title.startsWith(normalizedQuery) || workTitle.startsWith(normalizedQuery)) return 700;
         if (title.includes(normalizedQuery) || workTitle.includes(normalizedQuery)) return 500;
         return 0;
       };
-      return score(b) - score(a) || (b.rating || 0) - (a.rating || 0);
+      const scoreDiff = score(b) - score(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      // Prefer real reader counts; fall back to ratings only within local catalog.
+      const readersDiff =
+        (b.readersCount || 0) - (a.readersCount || 0) ||
+        (b.ratingsCount || 0) - (a.ratingsCount || 0);
+      if (readersDiff !== 0) return readersDiff;
+      return (b.rating || 0) - (a.rating || 0);
     })
     .slice(0, input.limit);
 }
@@ -359,8 +480,6 @@ export async function findCanonicalWork(identifier: string) {
     include: workInclude,
   });
 }
-
-import { toIso639_1 } from "@/lib/languages";
 
 export function canonicalWorkToDetails(
   work: any,
@@ -430,58 +549,22 @@ export function canonicalWorkToDetails(
   const displayTitle = rawTitle.replace(/\s*\([^)]*#\d+[^)]*\)/gi, "").trim() || rawTitle;
 
   const normalizedMatchedEdition = edition
-    ? {
-        id: edition.id,
-        title: edition.title,
-        format: normalizeBookFormat(edition.format),
-        language: toIso639_1(edition.language) || "und",
-        isbn13: edition.isbn13,
-        isbn10: edition.isbn10,
-        asin: edition.asin,
-        publisher: edition.publisher,
-        publicationDate: edition.publicationDate,
-        pages: edition.pages,
-        audioLengthMinutes: edition.audioLengthMinutes,
-        cover: pickBestCoverUrl([
-          ...(edition.covers?.map((c: any) => c.url) || []),
-        ]),
-      }
+    ? toPublicEdition(edition, work.id, false)
     : null;
 
-  const normalizedEditions = (work.editions || []).map((ed: any) => {
-    const edIsbn = ed.isbn13 || ed.isbn10;
-    const olCover = edIsbn
-      ? `https://covers.openlibrary.org/b/isbn/${edIsbn.replace(/[^0-9Xx]/g, "").toUpperCase()}-L.jpg`
-      : undefined;
-    const bestCover = pickBestCoverUrl([
-      ed.cover,
-      ...(ed.covers?.map((c: any) => c.url) || []),
-      olCover,
-    ]);
-    return {
-      id: ed.id,
-      title: ed.title,
-      format: normalizeBookFormat(ed.format),
-      language: toIso639_1(ed.language) || "und",
-      isbn13: ed.isbn13,
-      isbn10: ed.isbn10,
-      asin: ed.asin,
-      publisher: ed.publisher,
-      publicationDate: ed.publicationDate,
-      pages: ed.pages,
-      audioLengthMinutes: ed.audioLengthMinutes,
-      isDefault: ed.isDefault,
-      cover: bestCover || "",
-    };
-  });
+  const normalizedEditions = (work.editions || []).map((ed: any) =>
+    toPublicEdition(ed, work.id, true)
+  );
 
   const publicTranslations = Array.from(
     (work.translations || []).reduce((byLanguage: Map<string, any>, item: any) => {
-      const code = toIso639_1(item.language);
+      const code = toIso639_1(item.language) || item.language;
       if (!code) return byLanguage;
       const existing = byLanguage.get(code);
       if (!existing || (!existing.description && item.description)) {
         byLanguage.set(code, {
+          id: item.id ?? null,
+          workId: item.workId || work.id,
           language: code,
           title: item.title,
           description: item.description ? htmlToMarkdown(item.description) : null,
@@ -508,7 +591,7 @@ export function canonicalWorkToDetails(
         });
       }
     }
-    return result;
+    return collapseAuthorFragments(result);
   }
 
   const authorsList = dedupeContributors((work.contributors || []).filter((c: any) => c.role === "AUTHOR"));
@@ -541,8 +624,7 @@ export function canonicalWorkToDetails(
           descriptionLanguage &&
           descriptionLanguage !== (targetIso || effectiveIso)
       ),
-      language: normalizeLanguage(effectiveLang),
-      languageCode: normalizeLanguage(effectiveLang),
+      ...languageFields(effectiveLang),
       author: authorsList[0]?.name || author?.name || "Unknown Author",
       authors: authorsList.length > 0 ? authorsList : [{ id: author?.id || "0", name: author?.name || "Unknown Author", role: "AUTHOR" }],
       translators: translatorsList,
@@ -557,6 +639,8 @@ export function canonicalWorkToDetails(
       publicationDate: edition?.publicationDate || (work.publicationYear ? String(work.publicationYear) : null),
       publisher: edition?.publisher || null,
       pages: edition?.pages || null,
+      country: edition?.country || null,
+      countryCode: edition?.countryCode || null,
       genres: normalizeAndRankCategories(work.genres.map((item: any) => item.genre.name), 5),
       matchedEdition: normalizedMatchedEdition,
       editions: normalizedEditions,
@@ -688,6 +772,10 @@ export async function getCanonicalSeriesDetails(
     normalizeSearchText(work.canonicalTitle) === normalizeSearchText(series.canonicalName) ||
     /#\d+\s*-\s*\d+/i.test(edition?.title || "");
   const numberedMemberships = allMemberships.filter((membership) => !isCompilation(membership.work));
+  const seriesAuthor =
+    allMemberships
+      .map((membership) => primaryAuthor(membership.work))
+      .find((author) => author?.name?.trim()) || null;
 
   return {
     success: true,
@@ -701,7 +789,13 @@ export async function getCanonicalSeriesDetails(
       booksCount: numberedMemberships.length || allMemberships.length,
       primaryBooksCount: numberedMemberships.filter((item) => item.isPrimary).length,
       isCompleted: null,
-      author: null,
+      author: seriesAuthor
+        ? {
+            id: 0,
+            name: seriesAuthor.name,
+            url: "",
+          }
+        : null,
       provider: "canonical",
     },
     books: page.map(({ work, membership, edition, cover }) => ({
@@ -717,9 +811,8 @@ export async function getCanonicalSeriesDetails(
       positionLabel: membership.position == null ? null : String(membership.position),
       featured: edition?.isDefault ?? false,
       compilation: isCompilation(work, edition),
-      languageCode: toIso639_1(edition?.language || work.originalLanguage) || null,
-      language: toIso639_1(edition?.language || work.originalLanguage) || null,
-      format: edition?.format?.toLowerCase() || null,
+      ...languageFields(edition?.language || work.originalLanguage),
+      format: edition?.format ? toApiBookFormat(edition.format) : null,
       formatLabel: edition?.format || null,
     })),
     filters: {

@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/book/search?query=dont let the forest in&language=es"
+  url: "{{url}}/api/book/search?query=dont let the forest in&language=es"
   params:
     - name: query
       value: dont let the forest in

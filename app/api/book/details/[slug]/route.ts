@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
-import { getBookDetailsByProvider, parseProvider } from "@/lib/v0/book-providers";
+import { getBookDetailsByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_DETAILS,
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { parseLanguageParam } from "@/lib/languages";
 
 export const revalidate = 3600;
+export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
@@ -44,7 +46,9 @@ export async function GET(
     const provider = parseProvider(req.nextUrl.searchParams.get("provider"));
     const editionIdParam = req.nextUrl.searchParams.get("editionId");
     const rawEditionId = editionIdParam ? Number(editionIdParam) : undefined;
-    const language = req.nextUrl.searchParams.get("language")?.trim() || undefined;
+    const rawLanguage = req.nextUrl.searchParams.get("language")?.trim() || undefined;
+    const language = rawLanguage ? parseLanguageParam(rawLanguage) || undefined : undefined;
+    if (rawLanguage && !language) throw new Error("Invalid language parameter. Use a supported ISO code like en or es");
 
     if (
       editionIdParam &&
@@ -60,7 +64,7 @@ export async function GET(
       slug: decodeURIComponent(slug),
       editionId: editionId ?? "",
       language: language ?? "",
-    }, "v0");
+    });
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {
@@ -96,12 +100,15 @@ export async function GET(
     const status =
       message.includes("Invalid provider parameter") ||
       message.includes("Invalid editionId parameter") ||
+      message.includes("Invalid language parameter") ||
       message.includes("Goodreads HTML provider has been removed")
         ? 400
         : message.includes("HARDCOVER_API_TOKEN") ||
             message.includes("No configured book metadata providers")
           ? 503
-          : message.includes("No Hardcover book found") ||
+          : message.includes("Book not found") ||
+              message.includes("No provider could resolve") ||
+              message.includes("No Hardcover book found") ||
               message.includes("No Hardcover edition found") ||
               message.includes("does not belong to book")
             ? 404

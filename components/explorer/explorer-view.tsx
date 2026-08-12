@@ -35,15 +35,12 @@ import Image from "next/image";
 type ExplorerSubTab = "books" | "series" | "batch";
 
 export function ExplorerView() {
-  const [apiVersion, setApiVersion] = useState<"v0" | "v1">("v1");
   const [subTab, setSubTab] = useState<ExplorerSubTab>("books");
   const [query, setQuery] = useState("Fourth Wing");
   const [searchType, setSearchType] = useState("all");
   const [provider, setProvider] = useState("aggregate");
   const [language, setLanguage] = useState("");
   const [limit, setLimit] = useState("12");
-
-  const apiPath = (path: string) => (apiVersion === "v1" ? path.replace(/^\/api\//, "/api/v1/") : path);
 
   const [loading, setLoading] = useState(false);
   const [bookResults, setBookResults] = useState<any[]>([]);
@@ -92,7 +89,7 @@ export function ExplorerView() {
         if (language) params.set("language", language);
         if (limit) params.set("limit", limit);
 
-        const res = await fetch(apiPath(`/api/book/search?${params.toString()}`));
+        const res = await fetch(`/api/book/search?${params.toString()}`);
         const data = await res.json();
         if (data.success && data.results?.books) {
           setBookResults(data.results.books);
@@ -104,7 +101,7 @@ export function ExplorerView() {
         if (provider) params.set("provider", provider);
         if (limit) params.set("limit", limit);
 
-        const res = await fetch(apiPath(`/api/series/search?${params.toString()}`));
+        const res = await fetch(`/api/series/search?${params.toString()}`);
         const data = await res.json();
         if (data.success && data.results?.series) {
           setSeriesResults(data.results.series);
@@ -128,7 +125,7 @@ export function ExplorerView() {
       const params = new URLSearchParams();
       if (provider) params.set("provider", provider);
       if (editionId) params.set("editionId", editionId);
-      const res = await fetch(apiPath(`/api/book/details/${encodeURIComponent(slug)}?${params.toString()}`));
+      const res = await fetch(`/api/book/details/${encodeURIComponent(slug)}?${params.toString()}`);
       const data = await res.json();
       setModalData(data);
     } catch (err) {
@@ -146,7 +143,7 @@ export function ExplorerView() {
     try {
       const params = new URLSearchParams({ limit: "50" });
       if (provider) params.set("provider", provider);
-      const res = await fetch(apiPath(`/api/book/covers/${encodeURIComponent(slug)}?${params.toString()}`));
+      const res = await fetch(`/api/book/covers/${encodeURIComponent(slug)}?${params.toString()}`);
       const data = await res.json();
       setModalData(data);
     } catch (err) {
@@ -164,7 +161,7 @@ export function ExplorerView() {
     try {
       const params = new URLSearchParams();
       if (language) params.set("language", language);
-      const res = await fetch(apiPath(`/api/book/formats/${encodeURIComponent(slug)}?${params.toString()}`));
+      const res = await fetch(`/api/book/formats/${encodeURIComponent(slug)}?${params.toString()}`);
       const data = await res.json();
       setModalData(data);
     } catch (err) {
@@ -182,7 +179,7 @@ export function ExplorerView() {
     try {
       const params = new URLSearchParams({ limit: "50", offset: "0" });
       if (language) params.set("language", language);
-      const res = await fetch(apiPath(`/api/series/${encodeURIComponent(slug)}?${params.toString()}`));
+      const res = await fetch(`/api/series/${encodeURIComponent(slug)}?${params.toString()}`);
       const data = await res.json();
       setModalData(data);
     } catch (err) {
@@ -198,7 +195,7 @@ export function ExplorerView() {
     setBatchResults(null);
     try {
       const payload = JSON.parse(batchInput);
-      const res = await fetch(apiPath("/api/book/batch-search"), {
+      const res = await fetch("/api/book/batch-search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -275,28 +272,6 @@ export function ExplorerView() {
             </Button>
           </div>
 
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg p-1">
-            <button
-              onClick={() => setApiVersion("v0")}
-              className={`px-3 py-1 rounded text-xs font-semibold transition-all ${
-                apiVersion === "v0"
-                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              v0 (Live Aggregate)
-            </button>
-            <button
-              onClick={() => setApiVersion("v1")}
-              className={`px-3 py-1 rounded text-xs font-semibold transition-all ${
-                apiVersion === "v1"
-                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              v1 (Canonical DB)
-            </button>
-          </div>
         </div>
       </div>
 

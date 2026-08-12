@@ -69,7 +69,8 @@ function cleanIsbn(raw?: string | null): string | null {
   return clean.length === 10 || clean.length === 13 ? clean : null;
 }
 
-import { normalizeLanguage, roundRating } from "@/lib/canonical/constants";
+import { roundRating } from "@/lib/canonical/constants";
+import { getLanguageName, languageFields, toIso639_1 } from "@/lib/languages";
 
 /**
  * ISBNDB occasionally appends the author name to the title field in the form
@@ -103,7 +104,7 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
   const author = authors.length > 0 ? authors.join(", ") : "Unknown Author";
   const cover = b.image || "";
   const pubDate = b.date_published || b.publish_date || undefined;
-  const lang = normalizeLanguage(b.language);
+  const { language, languageCode } = languageFields(b.language);
 
   return {
     id,
@@ -116,8 +117,8 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
     genres: Array.isArray(b.subjects) && b.subjects.length > 0 ? b.subjects : undefined,
     isbn: isbn13 || isbn10 || null,
     isbn10: isbn10 || null,
-    language: lang,
-    languageCode: lang,
+    language,
+    languageCode,
     presentation: "isbn",
     sources: [
       {
@@ -135,16 +136,14 @@ function mapIsbndbBookToSearchBook(b: ISBNDBBook): NormalizedSearchBook {
       publicationDate: pubDate || null,
       pages: typeof b.pages === "number" ? b.pages : null,
       publisher: b.publisher || null,
-      language: lang,
-      languageCode: lang,
+      language,
+      languageCode,
       country: null,
       countryCode: null,
       cover,
     },
   };
 }
-
-import { getLanguageName, toIso639_1 } from "@/lib/languages";
 
 export async function searchIsbndb(
   input: BookSearchInput
@@ -305,7 +304,7 @@ export async function getIsbndbBookDetails(
       format: b.binding || null,
       cover: b.image || null,
       genres: b.subjects || [],
-      language: b.language || null,
+      ...languageFields(b.language),
     },
   };
 
@@ -341,8 +340,7 @@ export async function getIsbndbCovers(
       publicationDate: (bookObj.publicationDate as string) || null,
       pages: (bookObj.pages as number) || null,
       publisher: (bookObj.publisher as string) || null,
-      language: (bookObj.language as string) || null,
-      languageCode: null,
+      ...languageFields((bookObj.language as string) || (bookObj.languageCode as string) || null),
       country: null,
       countryCode: null,
       isDefault: true,

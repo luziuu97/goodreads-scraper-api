@@ -71,7 +71,7 @@ export const getBookFormatsApiResponse = {
   },
   availableLanguages: [
     { code: "en", name: "English" },
-    { code: "es", name: "Spanish; Castilian" },
+    { code: "es", name: "Spanish" },
   ],
   availableFormats: ["audiobook", "ebook", "hardcover", "paperback"],
   totalEditions: 78,

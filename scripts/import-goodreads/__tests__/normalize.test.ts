@@ -94,6 +94,10 @@ describe('normalizeLanguageCode', () => {
   test('fra -> fr', () => {
     expect(normalizeLanguageCode('fra')).toBe('fr');
   });
+  test('español / Spanish; Castilian -> es', () => {
+    expect(normalizeLanguageCode('español')).toBe('es');
+    expect(normalizeLanguageCode('Spanish; Castilian')).toBe('es');
+  });
   test('empty -> und', () => {
     expect(normalizeLanguageCode('')).toBe('und');
   });

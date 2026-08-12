@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/series/search"
+  url: "{{url}}/api/series/search"
   params:
     - name: query
       value: The Empyrean

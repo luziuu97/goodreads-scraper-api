@@ -4,7 +4,7 @@ import {
   batchSearchBooksByProvider,
   parseProvider,
   type BatchSearchItemInput,
-} from "@/lib/v0/book-providers";
+} from "@/lib/book-providers";
 
 export const runtime = "nodejs";
 

@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/book/covers/:bookId"
+  url: "{{url}}/api/book/covers/:bookId"
   params:
     - name: provider
       value: hardcover

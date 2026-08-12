@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG } from "@/lib/api-config";
-import { getSeriesDetailsByProvider, parseProvider } from "@/lib/v0/book-providers";
+import { getSeriesDetailsByProvider, parseProvider } from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_DETAILS,
@@ -46,7 +46,7 @@ export async function GET(
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100)
       : 50;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 100)) {
       return NextResponse.json(
         {
           success: false,
@@ -79,7 +79,7 @@ export async function GET(
       offset,
       language,
       format: format || "",
-    }, "v0");
+    });
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {

@@ -1,13 +1,15 @@
-# Goodreads Scraper API — v1 Client Reference
+# Goodreads Scraper API — Client Reference
 
-This document describes the public v1 endpoints intended for application clients. v1 uses the canonical Goodreads-derived database first and can fall back to configured metadata providers where applicable.
+This document describes the public endpoints. There is one API at `/api`. `/api/v1` is a temporary alias of the same routes and should not be treated as a second contract.
+
+The default engine uses the canonical Goodreads-derived database first and can fall back to configured metadata providers. Pin `provider=hardcover` (or another provider) to get that source’s live object.
 
 ## Quick start
 
 Replace `https://api.example.com` with the deployed API origin.
 
 ```text
-Base URL: https://api.example.com/api/v1
+Base URL: https://api.example.com/api
 Content type: application/json
 Authentication: none
 ```
@@ -60,7 +62,7 @@ Clients should primarily branch on the HTTP status and treat `error` as a human-
 ## 1. Search books
 
 ```http
-GET /api/v1/book/search
+GET /api/book/search
 ```
 
 Searches by title, author, ISBN, or translated edition title.
@@ -76,7 +78,7 @@ Searches by title, author, ISBN, or translated edition title.
 | Query | `limit` | integer | No | `10` | Number of results, from 1 to 50. |
 
 ```bash
-curl "https://api.example.com/api/v1/book/search?query=Juego%20de%20Tronos&language=es&limit=10"
+curl "https://api.example.com/api/book/search?query=Juego%20de%20Tronos&language=es&limit=10"
 ```
 
 ### Successful response
@@ -134,7 +136,7 @@ curl "https://api.example.com/api/v1/book/search?query=Juego%20de%20Tronos&langu
 ## 2. Batch search books
 
 ```http
-POST /api/v1/book/batch-search
+POST /api/book/batch-search
 Content-Type: application/json
 ```
 
@@ -162,7 +164,7 @@ Each `items[]` object accepts:
 Every item must provide a non-empty `isbn`, `query`, or `title`/`author` combination.
 
 ```bash
-curl -X POST "https://api.example.com/api/v1/book/batch-search" \
+curl -X POST "https://api.example.com/api/book/batch-search" \
   -H "Content-Type: application/json" \
   -d '{
     "provider": "aggregate",
@@ -238,7 +240,7 @@ This endpoint has a separate limit of 5 batch requests per 10 seconds and is nev
 ## 3. Get book details
 
 ```http
-GET /api/v1/book/details/{slug}
+GET /api/book/details/{slug}
 ```
 
 Returns work-level metadata plus the selected edition and known editions. `{slug}` can be a canonical work ID or slug, a provider-specific identifier, or an ISBN that the selected provider can resolve.
@@ -255,7 +257,7 @@ Returns work-level metadata plus the selected edition and known editions. `{slug
 The old `reviews=true` option is not supported and returns `400`.
 
 ```bash
-curl "https://api.example.com/api/v1/book/details/a-game-of-thrones?language=es"
+curl "https://api.example.com/api/book/details/a-game-of-thrones?language=es"
 ```
 
 ### Successful response
@@ -343,7 +345,7 @@ When an external provider supplies the result, `book` can include additional sou
 ## 4. Get book covers
 
 ```http
-GET /api/v1/book/covers/{slug}
+GET /api/book/covers/{slug}
 ```
 
 Returns edition covers, sorted by `pixelCount` descending when dimensions are known.
@@ -358,7 +360,7 @@ Returns edition covers, sorted by `pixelCount` descending when dimensions are kn
 | Query | `onlyWithCover` | boolean | No | `true` | When true, omit editions without a cover URL. Accepts `true`/`false`, `1`/`0`, `yes`/`no`, or `on`/`off`. |
 
 ```bash
-curl "https://api.example.com/api/v1/book/covers/fourth-wing?limit=50&onlyWithCover=true"
+curl "https://api.example.com/api/book/covers/fourth-wing?limit=50&onlyWithCover=true"
 ```
 
 ### Successful response
@@ -418,7 +420,7 @@ curl "https://api.example.com/api/v1/book/covers/fourth-wing?limit=50&onlyWithCo
 ## 5. Get book formats and editions
 
 ```http
-GET /api/v1/book/formats/{slug}
+GET /api/book/formats/{slug}
 ```
 
 Lists editions for a book and optionally filters them by language and reading format. This endpoint does not accept a `provider` parameter; it reads the canonical database first and otherwise falls back to Hardcover.
@@ -433,7 +435,7 @@ Lists editions for a book and optionally filters them by language and reading fo
 | Query | `limit` | integer | No | `50` | Maximum matching editions, from 1 to 100. |
 
 ```bash
-curl "https://api.example.com/api/v1/book/formats/fourth-wing?language=en&format=ebook&limit=20"
+curl "https://api.example.com/api/book/formats/fourth-wing?language=en&format=ebook&limit=20"
 ```
 
 ### Successful response
@@ -492,7 +494,7 @@ curl "https://api.example.com/api/v1/book/formats/fourth-wing?language=en&format
 ## 6. Search series
 
 ```http
-GET /api/v1/series/search
+GET /api/series/search
 ```
 
 Searches for a series by name.
@@ -506,7 +508,7 @@ Searches for a series by name.
 | Query | `limit` | integer | No | `10` | Number of results, from 1 to 50. |
 
 ```bash
-curl "https://api.example.com/api/v1/series/search?query=The%20Empyrean&limit=10"
+curl "https://api.example.com/api/series/search?query=The%20Empyrean&limit=10"
 ```
 
 ### Successful response
@@ -542,7 +544,7 @@ Optional properties can be absent when the source does not have them. Use `slug`
 ## 7. Get series details
 
 ```http
-GET /api/v1/series/{slug}
+GET /api/series/{slug}
 ```
 
 Returns series metadata and an ordered, filterable, paginated list of books.
@@ -559,7 +561,7 @@ Returns series metadata and an ordered, filterable, paginated list of books.
 | Query | `format` | string | No | all formats | `ebook`, `audiobook`, `hardcover`, `paperback`, or `physical`. |
 
 ```bash
-curl "https://api.example.com/api/v1/series/the-empyrean?language=original&limit=50&offset=0"
+curl "https://api.example.com/api/series/the-empyrean?language=original&limit=50&offset=0"
 ```
 
 ### Successful response

@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/admin/works"
+  url: "{{url}}/api/admin/works"
   params:
     - name: page
       value: "1"

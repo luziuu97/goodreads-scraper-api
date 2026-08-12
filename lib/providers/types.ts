@@ -28,6 +28,9 @@ export type NormalizedSearchBook = {
   author: string;
   cover: string;
   rating?: number;
+  /** Hardcover users_count / local ratingsCount — used for popularity ranking. */
+  readersCount?: number;
+  ratingsCount?: number;
   publicationDate?: string;
   genres?: string[];
   isbn?: string | null;
@@ -36,6 +39,10 @@ export type NormalizedSearchBook = {
   languageCode?: string | null;
   /** Translator names when a matched edition lists them. */
   translators?: string[];
+  /** Illustrator names when listed (not included in `author`). */
+  illustrators?: string[];
+  /** Narrator names for audiobook editions (not included in `author`). */
+  narrators?: string[];
   /**
    * How presentation fields were chosen:
    * - work: default work metadata

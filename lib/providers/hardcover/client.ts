@@ -1,6 +1,9 @@
 import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
-import { formatAudioLength } from "@/lib/canonical/constants";
-import { toIso639_1 } from "@/lib/languages";
+import {
+  formatAudioLength,
+  isCompilationOrDerivativeTitle,
+} from "@/lib/canonical/constants";
+import { languageFieldsFromParts, toIso639_1 } from "@/lib/languages";
 import { hardcoverLimiter } from "@/lib/outgoing-rate-limiter";
 
 const HARDCOVER_GRAPHQL_URL = "https://api.hardcover.app/v1/graphql";
@@ -27,6 +30,11 @@ type HardcoverSearchResult = {
   release_date?: string;
   genres?: string[];
   image?: HardcoverImage;
+  /** True when Hardcover marks the work as a multi-work compilation/bundle. */
+  compilation?: boolean | null;
+  /** Series position; fractional values (1.1, 3.1) often mean split/partial volumes. */
+  featured_series_position?: number | null;
+  pages?: number | null;
 };
 
 type HardcoverSearchHit = {
@@ -123,6 +131,7 @@ type HardcoverDetailsBook = {
     url?: string | null;
   }> | null;
   default_cover_edition?: HardcoverEditionDetails | null;
+  editions?: HardcoverEditionDetails[] | null;
 };
 
 type HardcoverEditionDetails = {
@@ -133,6 +142,9 @@ type HardcoverEditionDetails = {
   image?: HardcoverImage;
   pages?: number | null;
   edition_format?: string | null;
+  reading_format?: {
+    format?: string | null;
+  } | null;
   isbn_10?: string | null;
   isbn_13?: string | null;
   asin?: string | null;
@@ -158,14 +170,20 @@ export type HardcoverNormalizedSearchBook = {
   title: string;
   /** Canonical work title when presentation title comes from an edition. */
   workTitle?: string;
+  /** Primary writer(s) only — never translators/illustrators/narrators. */
   author: string;
   cover: string;
   rating?: number;
+  /** Hardcover users who have the book (primary popularity signal). */
+  readersCount?: number;
+  ratingsCount?: number;
   publicationDate?: string;
   genres?: string[];
   language?: string | null;
   languageCode?: string | null;
   translators?: string[];
+  illustrators?: string[];
+  narrators?: string[];
   presentation?: "work" | "edition" | "isbn";
   edition?: HardcoverNormalizedEdition;
   editions?: Array<{
@@ -208,6 +226,8 @@ export type HardcoverNormalizedEdition = {
 export type HardcoverNormalizedBookDetails = {
   scrapedURL: string;
   book: {
+    /** Hardcover numeric book id as string (structural identity). */
+    id: string;
     cover: string;
     series: string;
     seriesURL: string;
@@ -216,6 +236,8 @@ export type HardcoverNormalizedBookDetails = {
     audioLengthMinutes?: number | null;
     slug: string;
     title: string;
+    /** Work-level title (never edition marketing title). */
+    workTitle?: string;
     author: HardcoverContributor[];
     /** First translator when present (legacy singular field). */
     translator: HardcoverContributor | null;
@@ -242,6 +264,8 @@ export type HardcoverNormalizedBookDetails = {
     publishedBy: string | null;
     type: string | null;
     edition: HardcoverNormalizedEdition | null;
+    /** Sibling editions for the same work (ISBN / format variants). */
+    editions?: HardcoverNormalizedEdition[];
     related: unknown[];
     reviewBreakdown: {
       rating5: string;
@@ -626,10 +650,10 @@ function getEditionGenres(
 function languageFromEdition(
   language: HardcoverLanguage | undefined
 ): { language: string | null; languageCode: string | null } {
-  return {
-    language: trimToNull(language?.language),
-    languageCode: trimToNull(language?.code2)?.toLowerCase() ?? null,
-  };
+  return languageFieldsFromParts(
+    trimToNull(language?.language),
+    trimToNull(language?.code2)
+  );
 }
 
 function countryFromEdition(
@@ -639,6 +663,32 @@ function countryFromEdition(
     country: trimToNull(country?.name),
     countryCode: trimToNull(country?.code2)?.toLowerCase() ?? null,
   };
+}
+
+function readingFormatLabel(
+  edition: { reading_format?: { format?: string | null } | null } | null | undefined
+): string | null {
+  return trimToNull(edition?.reading_format?.format);
+}
+
+/**
+ * Prefer edition_format; fall back to reading_format (Hardcover ebooks often
+ * only set reading_format to "Ebook" with a null edition_format).
+ */
+function editionFormatLabel(
+  edition:
+    | {
+        edition_format?: string | null;
+        reading_format?: { format?: string | null } | null;
+      }
+    | null
+    | undefined
+): string | null {
+  return (
+    trimToNull(edition?.edition_format) ||
+    readingFormatLabel(edition) ||
+    null
+  );
 }
 
 function normalizeEdition(
@@ -661,7 +711,7 @@ function normalizeEdition(
     isbn: trimToNull(edition.isbn_13),
     isbn10: trimToNull(edition.isbn_10),
     asin: trimToNull(edition.asin),
-    format: trimToNull(edition.edition_format),
+    format: editionFormatLabel(edition as any),
     publicationDate: trimToNull(edition.release_date),
     pages: typeof edition.pages === "number" ? edition.pages : null,
     audioLength: audioInfo.audioLength,
@@ -715,6 +765,9 @@ function editionSelection(
     rating
     pages
     edition_format
+    reading_format {
+      format
+    }
     audio_seconds
     isbn_10
     isbn_13
@@ -891,8 +944,8 @@ type RankableSearchBook = {
  *
  * Typesense often ranks empty catalog shells with an exact translated title
  * above well-known works that only match via alternative_titles. We re-rank
- * by text relevance + title similarity + reader popularity + metadata completeness
- * so "El Señor de los Anillos" surfaces Tolkien rather than a blank entry.
+ * with **reader count as the primary popularity signal**, plus title similarity
+ * and metadata completeness, so "Game of Thrones" surfaces GRRM's novel.
  */
 function scoreSearchHit(hit: RankableSearchBook, maxTextMatch: number): number {
   const textRel = maxTextMatch > 0 ? hit.textMatch / maxTextMatch : 1;
@@ -900,11 +953,12 @@ function scoreSearchHit(hit: RankableSearchBook, maxTextMatch: number): number {
   const ratingsCount = hit.ratingsCount;
   const usersRead = hit.usersReadCount;
 
-  // Log scale so mega-hits outrank shells without totally drowning niche matches.
+  // Reader popularity dominates: a famous novel with thousands of readers
+  // must outrank a pop-up/comic with an exact title match and few readers.
   const popularity =
-    Math.log10(users + 1) * 18 +
-    Math.log10(ratingsCount + 1) * 10 +
-    Math.log10(usersRead + 1) * 4;
+    Math.log10(users + 1) * 42 +
+    Math.log10(ratingsCount + 1) * 14 +
+    Math.log10(usersRead + 1) * 6;
 
   const hasAuthor = Boolean(hit.book.author?.trim());
   const hasCover = Boolean(hit.book.cover);
@@ -914,16 +968,18 @@ function scoreSearchHit(hit: RankableSearchBook, maxTextMatch: number): number {
     hit.book.rating > 0;
 
   let completeness = 0;
-  if (hasAuthor) completeness += 22;
-  if (hasCover) completeness += 12;
-  if (hasRating) completeness += 12;
+  if (hasAuthor) completeness += 18;
+  if (hasCover) completeness += 10;
+  if (hasRating) completeness += 10;
   // Empty shells (title only, no readers) should sink hard.
   if (!hasAuthor && users === 0) completeness -= 50;
+  if (users === 0) completeness -= 20;
 
   // Tiny stable bias toward Typesense order when scores otherwise tie.
   const orderBias = Math.max(0, 3 - hit.originalIndex * 0.05);
 
-  return textRel * 40 + hit.titleSim * 35 + popularity + completeness + orderBias;
+  // Title similarity still matters, but not enough to beat popular works.
+  return textRel * 28 + hit.titleSim * 24 + popularity + completeness + orderBias;
 }
 
 function rankSearchBooks(
@@ -937,10 +993,10 @@ function rankSearchBooks(
   const maxTextMatch = Math.max(...hits.map((hit) => hit.textMatch), 1);
   return [...hits]
     .sort((a, b) => {
+      // Prefer more readers on near-ties of composite score.
       const scoreDiff = scoreSearchHit(b, maxTextMatch) - scoreSearchHit(a, maxTextMatch);
-      if (scoreDiff !== 0) {
-        return scoreDiff;
-      }
+      if (Math.abs(scoreDiff) > 0.01) return scoreDiff > 0 ? 1 : -1;
+      if (b.usersCount !== a.usersCount) return b.usersCount - a.usersCount;
       return a.originalIndex - b.originalIndex;
     })
     .slice(0, limit)
@@ -967,8 +1023,84 @@ type EnrichmentEdition = {
 type EnrichmentBook = {
   id: number;
   title?: string | null;
+  contributions?: HardcoverContribution[] | null;
   editions?: EnrichmentEdition[] | null;
 };
+
+function namesOf(people: HardcoverContributor[]): string[] {
+  return people.map((person) => person.name).filter(Boolean);
+}
+
+/**
+ * Build primary-author string and role-split contributor lists for search hits.
+ * Typesense `author_names` often mixes illustrators; prefer classified contributions.
+ */
+function presentationContributors(
+  bookContributions: HardcoverContribution[] | null | undefined,
+  editionContributions: HardcoverContribution[] | null | undefined,
+  typesenseAuthor: string
+): {
+  author: string;
+  translators?: string[];
+  illustrators?: string[];
+  narrators?: string[];
+} {
+  const work = groupContributions(bookContributions);
+  const edition = groupContributions(editionContributions);
+
+  const blocked = new Set(
+    [
+      ...work.translators,
+      ...work.illustrators,
+      ...work.narrators,
+      ...work.editors,
+      ...edition.translators,
+      ...edition.illustrators,
+      ...edition.narrators,
+      ...edition.editors,
+    ].map((person) => person.name.toLowerCase())
+  );
+
+  // Work-level authors are the primary writers; edition-level "authors" often
+  // include null-role illustrators misclassified as authors.
+  let authors = work.authors.filter(
+    (person) => !blocked.has(person.name.toLowerCase())
+  );
+  if (authors.length === 0) {
+    authors = edition.authors.filter(
+      (person) => !blocked.has(person.name.toLowerCase())
+    );
+  }
+  if (authors.length === 0 && typesenseAuthor.trim()) {
+    authors = typesenseAuthor
+      .split(",")
+      .map((part) => part.trim())
+      .filter((name) => name && !blocked.has(name.toLowerCase()))
+      .map((name, index) => ({
+        id: index + 1,
+        name,
+        url: "",
+        role: "Author",
+      }));
+  }
+
+  const translators = namesOf(
+    edition.translators.length > 0 ? edition.translators : work.translators
+  );
+  const illustrators = namesOf(
+    edition.illustrators.length > 0 ? edition.illustrators : work.illustrators
+  );
+  const narrators = namesOf(
+    edition.narrators.length > 0 ? edition.narrators : work.narrators
+  );
+
+  return {
+    author: authors.map((person) => person.name).join(", ") || typesenseAuthor.split(",")[0]?.trim() || "Unknown Author",
+    translators: translators.length > 0 ? translators : undefined,
+    illustrators: illustrators.length > 0 ? illustrators : undefined,
+    narrators: narrators.length > 0 ? narrators : undefined,
+  };
+}
 
 /**
  * Pick the best edition for a search hit based on query title match and
@@ -1107,6 +1239,9 @@ async function enrichSearchHitsWithEditions(
       books(where: { id: { _in: $ids } }) {
         id
         title
+        contributions {
+          ${contributionSelection()}
+        }
         editions(${editionsArgs}) {
           id
           title
@@ -1143,6 +1278,9 @@ async function enrichSearchHitsWithEditions(
       books(where: { id: { _in: $ids } }) {
         id
         title
+        contributions {
+          ${contributionSelection()}
+        }
         editions(${editionsArgs}) {
           id
           title
@@ -1206,19 +1344,33 @@ async function enrichSearchHitsWithEditions(
 
     const picked = pickPresentationEdition(query, workTitle, editions, languagePref);
     if (!picked) {
+      // Still split Typesense author_names using work-level contributions.
+      const cleaned = presentationContributors(
+        enrichment?.contributions,
+        null,
+        book.author
+      );
       return {
         ...book,
         workTitle,
+        author: cleaned.author,
+        translators: cleaned.translators ?? book.translators,
+        illustrators: cleaned.illustrators,
+        narrators: cleaned.narrators,
         presentation: book.presentation || "work",
       };
     }
 
     const edition = picked.edition;
     const normalized = normalizeEdition(edition as HardcoverEditionDetails);
-    const grouped = groupContributions(edition.contributions);
     const presentationTitle = trimToNull(edition.title) || book.title;
     const editionCover = toCoverUrl(edition.image || null);
     const { language, languageCode } = languageFromEdition(edition.language);
+    const contributors = presentationContributors(
+      enrichment?.contributions,
+      edition.contributions,
+      book.author
+    );
 
     const editionSummaries = editions
       .filter((ed: any) => ed.isbn_13 || ed.isbn_10 || ed.asin)
@@ -1245,15 +1397,13 @@ async function enrichSearchHitsWithEditions(
         trimToNull(edition.release_date) || book.publicationDate,
       language,
       languageCode,
-      translators:
-        grouped.translators.length > 0
-          ? grouped.translators.map((person) => person.name)
-          : undefined,
+      author: contributors.author,
+      translators: contributors.translators,
+      illustrators: contributors.illustrators,
+      narrators: contributors.narrators,
       presentation: "edition",
       edition: normalized,
       editions: editionSummaries.length > 0 ? editionSummaries : undefined,
-      // Authors stay work-level primary writers; don't replace with empty.
-      author: book.author || authorNamesFromContributions(edition.contributions),
     };
   });
 }
@@ -1302,16 +1452,12 @@ async function searchHardcoverBooksByIsbn(
         return null;
       }
 
-      // Prefer edition-level authors when present; otherwise book-level authors only
-      // (exclude translators/illustrators from the author string).
-      const author =
-        authorNamesFromContributions(edition.contributions) ||
-        authorNamesFromContributions(linkedBook?.contributions ?? null);
-
-      const grouped = groupContributions(
-        edition.contributions?.length
-          ? edition.contributions
-          : linkedBook?.contributions ?? null
+      const contributors = presentationContributors(
+        linkedBook?.contributions,
+        edition.contributions,
+        authorNamesFromContributions(linkedBook?.contributions ?? null) ||
+          authorNamesFromContributions(edition.contributions) ||
+          ""
       );
       const { language, languageCode } = languageFromEdition(edition.language);
 
@@ -1328,7 +1474,7 @@ async function searchHardcoverBooksByIsbn(
         id,
         title,
         workTitle: workTitle || title,
-        author,
+        author: contributors.author,
         cover: toCoverUrl(edition.image),
         rating:
           typeof linkedBook?.rating === "number" && Number.isFinite(linkedBook.rating)
@@ -1344,10 +1490,9 @@ async function searchHardcoverBooksByIsbn(
         genres: getEditionGenres(linkedBook?.cached_tags ?? null),
         language,
         languageCode,
-        translators:
-          grouped.translators.length > 0
-            ? grouped.translators.map((person) => person.name)
-            : undefined,
+        translators: contributors.translators,
+        illustrators: contributors.illustrators,
+        narrators: contributors.narrators,
         presentation: "isbn",
         edition: normalizeEdition(edition),
       };
@@ -1360,14 +1505,31 @@ async function searchHardcoverBooksByIsbn(
   };
 }
 
+/** True for split/partial series volumes (e.g. position 1.1, 3.1). */
+function isPartialSeriesPosition(position?: number | null): boolean {
+  if (typeof position !== "number" || !Number.isFinite(position)) return false;
+  // Integer positions (1, 2, 3) and null are whole books; fractions are splits.
+  return Math.abs(position - Math.round(position)) > 1e-9;
+}
+
 export async function searchHardcoverBooks(input: {
   query: string;
   limit: number;
   type: string;
   language?: string;
 }): Promise<{ totalResults: number; books: HardcoverNormalizedSearchBook[] }> {
+  // Sort by readers first; Typesense still keeps text relevance via query match.
+  // filter_by drops official compilation/bundle works at the index level.
   const searchQuery = `
-    query SearchBooks($query: String!, $perPage: Int!, $page: Int!, $fields: String!, $weights: String!) {
+    query SearchBooks(
+      $query: String!
+      $perPage: Int!
+      $page: Int!
+      $fields: String!
+      $weights: String!
+      $sort: String!
+      $filterBy: String!
+    ) {
       search(
         query: $query
         query_type: "Book"
@@ -1375,6 +1537,8 @@ export async function searchHardcoverBooks(input: {
         page: $page
         fields: $fields
         weights: $weights
+        sort: $sort
+        filter_by: $filterBy
       ) {
         results
       }
@@ -1383,6 +1547,9 @@ export async function searchHardcoverBooks(input: {
 
   const broadFields = "title,isbns,series_names,author_names,alternative_titles";
   const broadWeights = "5,5,3,1,1";
+  // Prefer popular whole works; compilation:false is a first-class Hardcover field.
+  const bookSort = "users_count:desc";
+  const bookFilterBy = "compilation:false";
 
   const effectiveType =
     input.type === "all" && isLikelyIsbnQuery(input.query) ? "isbn" : input.type;
@@ -1422,6 +1589,8 @@ export async function searchHardcoverBooks(input: {
     page: 1,
     fields: broadFields,
     weights: broadWeights,
+    sort: bookSort,
+    filterBy: bookFilterBy,
   });
 
   const rawHits = Array.isArray(data.search?.results?.hits) ? data.search.results.hits : [];
@@ -1431,6 +1600,17 @@ export async function searchHardcoverBooks(input: {
     const result = hit.document;
     const title = typeof result?.title === "string" ? result.title.trim() : "";
     if (!title) {
+      return;
+    }
+    // Server-side compilation filter + client-side derivatives (comics, part 1/2,
+    // fractional series positions for split volumes).
+    if (result?.compilation === true) {
+      return;
+    }
+    if (isPartialSeriesPosition(result?.featured_series_position ?? null)) {
+      return;
+    }
+    if (isCompilationOrDerivativeTitle(title)) {
       return;
     }
 
@@ -1448,6 +1628,15 @@ export async function searchHardcoverBooks(input: {
     const rating =
       typeof ratingRaw === "number" && ratingRaw > 0 ? ratingRaw : undefined;
 
+    const usersCount =
+      typeof result?.users_count === "number" && Number.isFinite(result.users_count)
+        ? Math.max(0, result.users_count)
+        : 0;
+    const ratingsCount =
+      typeof result?.ratings_count === "number" && Number.isFinite(result.ratings_count)
+        ? Math.max(0, result.ratings_count)
+        : 0;
+
     const book: HardcoverNormalizedSearchBook = {
       id,
       title,
@@ -1455,6 +1644,8 @@ export async function searchHardcoverBooks(input: {
       author: authorNames.join(", "),
       cover: toCoverUrl(result?.image || null),
       rating,
+      readersCount: usersCount > 0 ? usersCount : undefined,
+      ratingsCount: ratingsCount > 0 ? ratingsCount : undefined,
       publicationDate:
         typeof result?.release_date === "string" && result.release_date.trim()
           ? result.release_date
@@ -1469,14 +1660,8 @@ export async function searchHardcoverBooks(input: {
         typeof hit.text_match === "number" && Number.isFinite(hit.text_match)
           ? hit.text_match
           : 0,
-      usersCount:
-        typeof result?.users_count === "number" && Number.isFinite(result.users_count)
-          ? Math.max(0, result.users_count)
-          : 0,
-      ratingsCount:
-        typeof result?.ratings_count === "number" && Number.isFinite(result.ratings_count)
-          ? Math.max(0, result.ratings_count)
-          : 0,
+      usersCount,
+      ratingsCount,
       usersReadCount:
         typeof result?.users_read_count === "number" &&
         Number.isFinite(result.users_read_count)
@@ -1566,6 +1751,9 @@ export async function fetchHardcoverBookDetails(
     default_cover_edition {
       ${editionSelection(false, false, true)}
     }
+    editions(limit: 40, order_by: { users_count: desc }) {
+      ${editionSelection(false, false, false)}
+    }
   `;
 
   if (isIsbn) {
@@ -1606,10 +1794,22 @@ export async function fetchHardcoverBookDetails(
         );
 
         const displayTitle = trimToNull(edition.title) || book.title;
+        const formatLabel = editionFormatLabel(edition);
+        const siblingEditions = (book.editions || [])
+          .map((ed) => normalizeEdition(ed))
+          .filter((ed): ed is HardcoverNormalizedEdition => Boolean(ed));
+        // Ensure the matched edition is present even if not in the top-N list.
+        if (
+          normalizedEdition &&
+          !siblingEditions.some((ed) => ed.id === normalizedEdition.id)
+        ) {
+          siblingEditions.unshift(normalizedEdition);
+        }
 
         return {
           scrapedURL: `https://hardcover.app/books/${book.slug}`,
           book: {
+            id: String(book.id),
             cover: toCoverUrl(edition.image || null) || toCoverUrl(book.image),
             series,
             seriesURL,
@@ -1618,6 +1818,8 @@ export async function fetchHardcoverBookDetails(
             audioLengthMinutes: audioInfo.audioLengthMinutes,
             slug: book.slug,
             title: displayTitle,
+            // Work-level title for ingest (edition title may include series junk).
+            workTitle: book.title,
             author: contributors.authors,
             translator: contributors.translators[0] || null,
             translators: contributors.translators,
@@ -1630,7 +1832,7 @@ export async function fetchHardcoverBookDetails(
             reviewsCount: typeof book.reviews_count === "number" ? String(book.reviews_count) : "",
             description: formatBookDescription(book.headline, book.description),
             genres: getEditionGenres(book.cached_tags ?? null) || [],
-            bookEdition: edition.edition_format || null,
+            bookEdition: formatLabel,
             publishDate: edition.release_date || book.release_date || null,
             isbn: edition.isbn_13 || null,
             isbn10: edition.isbn_10 || null,
@@ -1640,8 +1842,9 @@ export async function fetchHardcoverBookDetails(
             country,
             countryCode,
             publishedBy: edition.publisher?.name || null,
-            type: edition.edition_format || null,
+            type: formatLabel,
             edition: normalizedEdition,
+            editions: siblingEditions,
             related: [],
             reviewBreakdown: { rating5: "0", rating4: "0", rating3: "0", rating2: "0", rating1: "0" },
             quotes: "",
@@ -1729,16 +1932,28 @@ export async function fetchHardcoverBookDetails(
   // otherwise keep the work title.
   const displayTitle =
     (typeof options.editionId === "number" && trimToNull(edition?.title)) || book.title;
+  const formatLabel = editionFormatLabel(edition);
+  const siblingEditions = (book.editions || [])
+    .map((ed) => normalizeEdition(ed))
+    .filter((ed): ed is HardcoverNormalizedEdition => Boolean(ed));
+  if (
+    normalizedEdition &&
+    !siblingEditions.some((ed) => ed.id === normalizedEdition.id)
+  ) {
+    siblingEditions.unshift(normalizedEdition);
+  }
 
   return {
     scrapedURL: `https://hardcover.app/books/${book.slug}`,
     book: {
+      id: String(book.id),
       cover: toCoverUrl(edition?.image || null) || toCoverUrl(book.image),
       series,
       seriesURL,
       pages: typeof edition?.pages === "number" ? edition.pages : null,
       slug: book.slug,
       title: displayTitle,
+      workTitle: book.title,
       author: contributors.authors,
       translator: contributors.translators[0] || null,
       translators: contributors.translators,
@@ -1753,7 +1968,7 @@ export async function fetchHardcoverBookDetails(
         typeof book.reviews_count === "number" ? String(book.reviews_count) : "",
       description: formatBookDescription(book.headline, book.description),
       genres: getEditionGenres(book.cached_tags ?? null) || [],
-      bookEdition: trimToNull(edition?.edition_format),
+      bookEdition: formatLabel,
       publishDate:
         trimToNull(edition?.release_date) || trimToNull(book.release_date),
       isbn: trimToNull(edition?.isbn_13),
@@ -1764,8 +1979,9 @@ export async function fetchHardcoverBookDetails(
       country,
       countryCode,
       publishedBy: trimToNull(edition?.publisher?.name),
-      type: trimToNull(edition?.edition_format),
+      type: formatLabel,
       edition: normalizedEdition,
+      editions: siblingEditions,
       related: [],
       reviewBreakdown: {
         rating5: "",
@@ -2175,9 +2391,8 @@ function normalizeLanguageParam(value: string | undefined | null): string {
   if (!raw || raw === "original" || raw === "default" || raw === "auto") {
     return "original";
   }
-  // Accept en, es, eng, spa-ish short codes; keep first token of "es-ES"
-  const code = raw.split(/[-_]/)[0] || raw;
-  if (!/^[a-z]{2,3}$/.test(code)) {
+  const code = toIso639_1(raw);
+  if (!code) {
     throw new Error(
       "Invalid language parameter. Use an ISO code like en or es, or original"
     );
@@ -2304,13 +2519,16 @@ function formatMatchesFilter(
 function collectEditionLanguage(
   edition: HardcoverEditionLangFormat | null | undefined
 ): { code: string; name: string } | null {
-  const code = edition?.language?.code2?.trim().toLowerCase();
-  if (!code) {
+  const fields = languageFieldsFromParts(
+    trimToNull(edition?.language?.language),
+    trimToNull(edition?.language?.code2)
+  );
+  if (!fields.languageCode) {
     return null;
   }
   return {
-    code,
-    name: edition?.language?.language?.trim() || code,
+    code: fields.languageCode,
+    name: fields.language || fields.languageCode,
   };
 }
 

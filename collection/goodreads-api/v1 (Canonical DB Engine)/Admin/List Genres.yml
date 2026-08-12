@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{url}}/api/v1/admin/genres"
+  url: "{{url}}/api/admin/genres"
   auth: inherit
 
 settings:

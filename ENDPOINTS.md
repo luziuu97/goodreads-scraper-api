@@ -1,14 +1,13 @@
-# API Endpoints & Versioning
+# API Endpoints
 
-Structured book metadata API supporting dual versioning:
+Structured book metadata API. There is one public contract:
 
-- **`v0` (Legacy / Unversioned)**: `/api/...` (e.g. `/api/book/search`) — Stateless real-time live multi-provider aggregation (Hardcover, ISBNdb, OpenLibrary). No local database required.
-- **`v1` (Canonical Database Engine)**: `/api/v1/...` (e.g. `/api/v1/book/search`, `/api/v1/admin/works`) — High-performance canonical database engine backed by local Goodreads dumps, Prisma staging database, and administrative CRUD workflows.
+- **Base URL**: `/api/...` (e.g. `/api/book/search`)
+- **Engine**: canonical database first, with live provider fallback (Hardcover, ISBNDB, Open Library)
+- **Source pin**: `provider=hardcover` (or another provider) still returns that provider’s live object
+- **`/api/v1/...`**: temporary alias of the same `/api/...` routes. Prefer `/api`.
 
-## Base URLs
-
-- **Legacy / Live Aggregation (v0)**: `/api/...`
-- **Canonical DB Engine (v1)**: `/api/v1/...`
+Admin CRUD lives at `/api/admin/...` (`/api/v1/admin/...` is the same alias).
 
 ---
 
@@ -109,44 +108,60 @@ GET /api/book/details/1662524?provider=hardcover&editionId=32963227
 {
   "success": true,
   "provider": "aggregate",
-  "scrapedURL": "https://hardcover.app/books/...",
+  "scrapedURL": "canonical://work/...",
   "book": {
-    "provider": "hardcover",
-    "title": "...",
-    "cover": "...",
-    "author": [{ "id": 1, "name": "...", "url": "..." }],
-    "translator": null,
-    "translators": [],
-    "illustrators": [],
-    "narrators": [],
-    "editors": [],
-    "otherContributors": [],
-    "rating": "4.50",
-    "publishDate": "...",
-    "genres": ["..."],
-    "isbn": "...",
-    "isbn10": "...",
-    "language": "English",
+    "id": "62d7fb9a-bc87-4eb7-a9bb-6df729d67d25",
+    "slug": "fourth-wing",
+    "title": "Fourth Wing",
+    "canonicalTitle": "Fourth Wing",
+    "author": "Rebecca Yarros",
+    "authors": [{ "id": "author-1", "name": "Rebecca Yarros", "role": "AUTHOR" }],
+    "rating": 4.5,
+    "ratingsCount": 120000,
+    "publicationYear": 2023,
+    "language": "en",
     "languageCode": "en",
-    "country": "United States of America",
-    "countryCode": "us",
-    "pages": 517,
-    "publishedBy": "Red Tower Books",
-    "edition": {
-      "id": 32963227,
-      "isbn": "...",
-      "pages": 517,
-      "publisher": "Red Tower Books",
-      "language": "English",
-      "languageCode": "en",
-      "country": "United States of America",
-      "countryCode": "us"
-    }
+    "genres": ["Fantasy"],
+    "matchedEdition": {
+      "id": "edition-1",
+      "workId": "62d7fb9a-bc87-4eb7-a9bb-6df729d67d25",
+      "title": "Fourth Wing",
+      "format": "hardcover",
+      "language": "en",
+      "isbn13": "9781649374042",
+      "cover": "https://...",
+      "covers": [
+        {
+          "id": "cover-1",
+          "editionId": "edition-1",
+          "provider": "hardcover",
+          "url": "https://...",
+          "width": 1200,
+          "height": 1800,
+          "pixelCount": 2160000,
+          "imageFormat": "jpeg",
+          "isDefault": true
+        }
+      ],
+      "providerMappings": [
+        {
+          "id": "map-1",
+          "provider": "hardcover",
+          "providerWorkId": "1662524",
+          "providerEditionId": null,
+          "workId": "62d7fb9a-bc87-4eb7-a9bb-6df729d67d25",
+          "editionId": "edition-1"
+        }
+      ]
+    },
+    "editions": [],
+    "translations": [],
+    "series": []
   }
 }
 ```
 
-When `editionId` is provided (e.g. from an ISBN search hit), edition-specific fields (`pages`, `isbn`, `language`, `country`, `publisher`, `publishDate`, `type`, cover, and role-split contributors) match that edition. Translators, illustrators, narrators, and editors are returned in their own arrays — not mixed into `author`.
+Default details use the canonical work object (`author` is a string, `rating` is a number). Edition rows include both the current `cover` URL and the production dump fields `covers[]` / `providerMappings[]`. Pin `provider=hardcover` to get the live Hardcover object instead (`author` as an array, string `rating`).
 
 Successful details responses are cached for about **14 days**.
 

@@ -162,6 +162,8 @@ model Edition {
   publicationDate  String?
   pages            Int?
   audioLengthMinutes Int?
+  country          String?
+  countryCode      String?
   isDefault        Boolean  @default(false)
   ratingsCount     Int?
   textReviewsCount Int?

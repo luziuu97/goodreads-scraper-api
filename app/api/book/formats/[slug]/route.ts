@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { API_CONFIG, getHardcoverApiToken } from "@/lib/api-config";
 import { fetchHardcoverBookFormats } from "@/lib/providers/hardcover/client";
+import { workHasTrustedSource } from "@/lib/canonical/authority";
 import { findCanonicalWork } from "@/lib/canonical/reader";
 import {
   buildLogicalCacheKey,
@@ -8,6 +9,7 @@ import {
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { getLanguageName, languageFields, parseLanguageParam, toIso639_1 } from "@/lib/languages";
 
 export const revalidate = 3600;
 
@@ -47,10 +49,11 @@ export async function GET(
       );
     }
 
-    const language = req.nextUrl.searchParams.get("language");
+    const rawLanguage = req.nextUrl.searchParams.get("language");
+    const language = rawLanguage === "original" ? "original" : parseLanguageParam(rawLanguage);
     const format = req.nextUrl.searchParams.get("format");
 
-    if (language && language !== "original" && !/^[a-z]{2,3}$/i.test(language.trim())) {
+    if (rawLanguage && rawLanguage !== "original" && !language) {
       throw new Error("Invalid language parameter. Use an ISO code like en or es");
     }
     if (
@@ -69,7 +72,7 @@ export async function GET(
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100)
       : 50;
 
-    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (Number.isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 100)) {
       return NextResponse.json(
         {
           success: false,
@@ -84,7 +87,7 @@ export async function GET(
       limit,
       language: language?.trim() || "",
       format: format?.trim() || "",
-    }, "v0");
+    });
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {
@@ -97,19 +100,28 @@ export async function GET(
       return cachedResponse;
     }
 
-    // Postgres sits between Redis and Hardcover. Stored editions can satisfy
-    // this endpoint even when the external provider is unavailable.
+    // Only serve local editions when the work is trusted and not a thin
+    // backup-only row; otherwise fall through to Hardcover.
     try {
       const localWork = await findCanonicalWork(decodedSlug);
-      if (localWork && localWork.editions.length > 0) {
-        const requestedLanguage = language?.trim().toLowerCase() || null;
+      const trustedLocal =
+        localWork &&
+        workHasTrustedSource(localWork) &&
+        localWork.editions.length > 0 &&
+        (localWork.editions.length > 1 ||
+          localWork.editions.some((edition) => edition.asin));
+      if (localWork && trustedLocal) {
+        const requestedLanguage =
+          language?.trim().toLowerCase() === "original"
+            ? "original"
+            : toIso639_1(language) || language?.trim().toLowerCase() || null;
         const requestedFormat = format?.trim().toUpperCase() || null;
         const formats = localWork.editions
           .filter((edition) => {
             const languageMatches =
               !requestedLanguage ||
               requestedLanguage === "original" ||
-              edition.language?.toLowerCase() === requestedLanguage;
+              toIso639_1(edition.language) === requestedLanguage;
             const formatMatches =
               !requestedFormat ||
               edition.format === requestedFormat ||
@@ -128,8 +140,7 @@ export async function GET(
               formatLabel: edition.format,
               editionFormat: edition.format,
               readingFormat: null,
-              language: edition.language,
-              languageCode: edition.language,
+              ...languageFields(edition.language),
               country: null,
               countryCode: null,
               isbn: edition.isbn13,
@@ -150,13 +161,22 @@ export async function GET(
           formats,
           filters: {
             language: requestedLanguage,
-            resolvedLanguage: requestedLanguage === "original" ? localWork.originalLanguage : requestedLanguage,
-            originalLanguage: localWork.originalLanguage,
+            resolvedLanguage:
+              requestedLanguage === "original"
+                ? toIso639_1(localWork.originalLanguage)
+                : requestedLanguage,
+            originalLanguage: toIso639_1(localWork.originalLanguage),
             format: requestedFormat?.toLowerCase() || null,
           },
-          availableLanguages: Array.from(new Set(localWork.editions.map((edition) => edition.language)))
+          availableLanguages: Array.from(
+            new Set(
+              localWork.editions
+                .map((edition) => toIso639_1(edition.language))
+                .filter((code): code is string => Boolean(code))
+            )
+          )
             .sort()
-            .map((code) => ({ code, name: code })),
+            .map((code) => ({ code, name: getLanguageName(code) || code })),
           availableFormats: Array.from(new Set(localWork.editions.map((edition) => edition.format.toLowerCase()))).sort(),
           totalEditions: localWork.editions.length,
           totalMatched: formats.length,

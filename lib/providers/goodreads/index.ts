@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { isIgnoredAuthor, selectBestCover } from "@/lib/canonical/constants";
 import { canonicalWorkToSearchBook } from "@/lib/canonical/reader";
+import { languageFields } from "@/lib/languages";
 import type {
   BookCoversInput,
   BookDataProvider,
@@ -215,10 +216,20 @@ export const goodreadsProvider: BookDataProvider = {
       reviewsCount: work.reviewsCount,
       popularityScore: work.popularityScore,
       author:
-        work.contributors.find((a) => !isIgnoredAuthor(a.author.id, a.author.name))?.author?.name ||
+        work.contributors.find(
+          (a) =>
+            a.role === "AUTHOR" &&
+            !isIgnoredAuthor(a.author.id, a.author.name)
+        )?.author?.name ||
+        work.contributors.find((a) => !isIgnoredAuthor(a.author.id, a.author.name))
+          ?.author?.name ||
         "Unknown Author",
       authors: work.contributors
-        .filter((a) => !isIgnoredAuthor(a.author.id, a.author.name))
+        .filter(
+          (a) =>
+            a.role === "AUTHOR" &&
+            !isIgnoredAuthor(a.author.id, a.author.name)
+        )
         .map((a) => ({
           id: a.author.id,
           name: a.author.name,
@@ -251,6 +262,7 @@ export const goodreadsProvider: BookDataProvider = {
             title: defaultEdition.title,
             isbn10: defaultEdition.isbn10,
             isbn13: defaultEdition.isbn13,
+            asin: defaultEdition.asin,
             format: defaultEdition.format,
             language: defaultEdition.language,
             publisher: defaultEdition.publisher,
@@ -328,8 +340,7 @@ export const goodreadsProvider: BookDataProvider = {
           publicationDate: ed.publicationDate,
           pages: ed.pages,
           publisher: ed.publisher,
-          language: ed.language,
-          languageCode: ed.language,
+          ...languageFields(ed.language),
           country: null,
           countryCode: null,
           isDefault: ed.isDefault,
@@ -434,8 +445,7 @@ export const goodreadsProvider: BookDataProvider = {
         positionLabel: ws.position ? String(ws.position) : `${idx + 1}`,
         featured: true,
         compilation: false,
-        languageCode: w.originalLanguage || null,
-        language: w.originalLanguage || null,
+        ...languageFields(w.originalLanguage),
         format: ed?.format || null,
         formatLabel: ed?.format || null,
       };

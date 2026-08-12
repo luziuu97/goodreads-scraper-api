@@ -1,11 +1,24 @@
 /**
  * ISO language definitions and normalization helpers for book metadata APIs.
- * Supports ISO 639-1 (2-letter), ISO 639-2 (3-letter), and English language names.
+ *
+ * Accepts ISO 639-1, ISO 639-2 (B/T), BCP-47 tags, English names, native names,
+ * and common aliases from external providers (Hardcover, Open Library, ISBNDB, etc.).
+ *
+ * Response contract:
+ *   languageCode → always ISO 639-1 (e.g. "es")
+ *   language     → always English display name (e.g. "Spanish")
  */
 
 export type LanguageDefinition = {
   iso639_1: string;
   iso639_2: string;
+  name: string;
+  nativeName: string;
+};
+
+/** Canonical language fields for API responses. */
+export type CanonicalLanguage = {
+  code: string;
   name: string;
   nativeName: string;
 };
@@ -47,27 +60,215 @@ export const ACCEPTED_LANGUAGES: LanguageDefinition[] = [
   { iso639_1: "ms", iso639_2: "may", name: "Malay", nativeName: "Bahasa Melayu" },
 ];
 
-/** Map for fast lookup by iso 639-1, iso 639-2, or lowercase English name */
+/**
+ * Extra aliases that external services emit (ISO 639-2/T terminological codes,
+ * regional names, open-library style labels, endonyms with/without accents).
+ * Keys must be lowercase and accent-stripped where they contain Latin letters.
+ */
+const LANGUAGE_ALIASES: Record<string, string> = {
+  // ISO 639-2/T (terminological) where they differ from bibliographic (B)
+  fra: "fr",
+  deu: "de",
+  nld: "nl",
+  zho: "zh",
+  ces: "cs",
+  ell: "el",
+  fas: "fa",
+  msa: "ms",
+  eus: "eu",
+  rum: "ro",
+  // Common provider / regional labels
+  castilian: "es",
+  castellano: "es",
+  espanol: "es",
+  español: "es",
+  "spanish castilian": "es",
+  ingles: "en",
+  inglés: "en",
+  francais: "fr",
+  français: "fr",
+  portugues: "pt",
+  português: "pt",
+  "brazilian portuguese": "pt",
+  "portuguese brazil": "pt",
+  "bahasa indonesia": "id",
+  "bahasa melayu": "ms",
+  "simplified chinese": "zh",
+  "traditional chinese": "zh",
+  mandarin: "zh",
+  cantonese: "zh",
+  greek: "el",
+  modern: "el",
+  "modern greek": "el",
+  farsi: "fa",
+  nynorsk: "no",
+  bokmal: "no",
+  bokmål: "no",
+  "norwegian bokmal": "no",
+  "norwegian nynorsk": "no",
+};
+
+const UNDETERMINED = new Set([
+  "und",
+  "undetermined",
+  "unknown",
+  "zxx",
+  "mul",
+  "mis",
+  "null",
+  "none",
+  "n/a",
+  "na",
+]);
+
+/** Map for fast lookup by code, English name, native name, or alias. */
 const LANGUAGE_LOOKUP = new Map<string, LanguageDefinition>();
 
+function stripDiacritics(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function registerLookupKey(key: string, lang: LanguageDefinition): void {
+  const lower = key.toLowerCase().trim();
+  if (!lower) return;
+  LANGUAGE_LOOKUP.set(lower, lang);
+  const stripped = stripDiacritics(lower);
+  if (stripped !== lower) {
+    LANGUAGE_LOOKUP.set(stripped, lang);
+  }
+}
+
 ACCEPTED_LANGUAGES.forEach((lang) => {
-  LANGUAGE_LOOKUP.set(lang.iso639_1.toLowerCase(), lang);
-  LANGUAGE_LOOKUP.set(lang.iso639_2.toLowerCase(), lang);
-  LANGUAGE_LOOKUP.set(lang.name.toLowerCase(), lang);
+  registerLookupKey(lang.iso639_1, lang);
+  registerLookupKey(lang.iso639_2, lang);
+  registerLookupKey(lang.name, lang);
+  registerLookupKey(lang.nativeName, lang);
 });
+
+for (const [alias, iso1] of Object.entries(LANGUAGE_ALIASES)) {
+  const lang = LANGUAGE_LOOKUP.get(iso1);
+  if (lang) {
+    registerLookupKey(alias, lang);
+  }
+}
+
+/**
+ * Clean a raw language string from an external source into a lookup key.
+ * Handles BCP-47 tags (es-MX), Open Library labels (Spanish; Castilian),
+ * and mixed punctuation.
+ */
+export function cleanLanguageInput(input?: string | null): string | null {
+  if (!input) return null;
+  let value = input.trim();
+  if (!value) return null;
+
+  // Drop parenthetical notes: "Spanish (Spain)" → "Spanish"
+  value = value.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+  // Open Library / ISO multi-name: "Spanish; Castilian" → "Spanish"
+  if (value.includes(";")) {
+    value = value.split(";")[0].trim();
+  }
+  // BCP-47 / locale tags: "es-MX", "en_US", "zh-Hans" → primary subtag
+  value = value.split(/[-_]/)[0].trim();
+
+  const lower = value.toLowerCase();
+  if (!lower || UNDETERMINED.has(lower)) return null;
+  return lower;
+}
+
+function lookupDefinition(input?: string | null): LanguageDefinition | null {
+  const clean = cleanLanguageInput(input);
+  if (!clean) return null;
+
+  const direct = LANGUAGE_LOOKUP.get(clean);
+  if (direct) return direct;
+
+  const stripped = stripDiacritics(clean);
+  if (stripped !== clean) {
+    const byStripped = LANGUAGE_LOOKUP.get(stripped);
+    if (byStripped) return byStripped;
+  }
+
+  // Multi-word labels after partial clean: "spanish castilian"
+  const spaced = stripped.replace(/[^a-z0-9]+/g, " ").trim();
+  if (spaced && spaced !== stripped) {
+    const bySpaced = LANGUAGE_LOOKUP.get(spaced);
+    if (bySpaced) return bySpaced;
+    // Prefer first token for "spanish language", etc.
+    const first = spaced.split(/\s+/)[0];
+    const byFirst = LANGUAGE_LOOKUP.get(first);
+    if (byFirst) return byFirst;
+  }
+
+  return null;
+}
+
+/**
+ * Resolve any provider language string into a canonical { code, name, nativeName }.
+ * Returns null when the input is empty, undetermined, or unrecognized.
+ */
+export function canonicalizeLanguage(input?: string | null): CanonicalLanguage | null {
+  const def = lookupDefinition(input);
+  if (!def) return null;
+  return {
+    code: def.iso639_1,
+    name: def.name,
+    nativeName: def.nativeName,
+  };
+}
+
+/**
+ * Pair of fields for API responses and provider mappers.
+ * languageCode is always ISO 639-1; language is always the English display name.
+ */
+export function languageFields(input?: string | null): {
+  language: string | null;
+  languageCode: string | null;
+} {
+  const canonical = canonicalizeLanguage(input);
+  if (canonical) {
+    return { language: canonical.name, languageCode: canonical.code };
+  }
+
+  // Preserve unrecognized ISO-639-1-looking codes so we don't drop rare languages.
+  const clean = cleanLanguageInput(input);
+  if (clean && /^[a-z]{2}$/.test(clean) && !UNDETERMINED.has(clean)) {
+    return { language: null, languageCode: clean };
+  }
+
+  return { language: null, languageCode: null };
+}
+
+/**
+ * Prefer an explicit code (provider ISO field) over a display name when both exist.
+ */
+export function languageFieldsFromParts(
+  nameOrCode?: string | null,
+  preferredCode?: string | null
+): { language: string | null; languageCode: string | null } {
+  const fromCode = preferredCode ? languageFields(preferredCode) : null;
+  if (fromCode?.languageCode) {
+    // Prefer English name from our table; fall back to provider name only if unknown.
+    if (fromCode.language) return fromCode;
+    const fromName = languageFields(nameOrCode);
+    return {
+      language: fromName.language,
+      languageCode: fromCode.languageCode,
+    };
+  }
+  return languageFields(nameOrCode || preferredCode);
+}
 
 /**
  * Normalizes input language string to ISO 639-1 (2-letter code).
  * Returns lowercase 2-letter code if matched, or raw 2-letter input if valid, or null.
  */
 export function toIso639_1(input?: string | null): string | null {
-  if (!input) return null;
-  const clean = input.trim().toLowerCase().split(/[-_]/)[0];
-  const matched = LANGUAGE_LOOKUP.get(clean);
-  if (matched) {
-    return matched.iso639_1;
-  }
-  if (/^[a-z]{2}$/.test(clean)) {
+  const canonical = canonicalizeLanguage(input);
+  if (canonical) return canonical.code;
+
+  const clean = cleanLanguageInput(input);
+  if (clean && /^[a-z]{2}$/.test(clean) && !UNDETERMINED.has(clean)) {
     return clean;
   }
   return null;
@@ -78,13 +279,11 @@ export function toIso639_1(input?: string | null): string | null {
  * Returns lowercase 3-letter code if matched, or raw 3-letter input if valid, or null.
  */
 export function toIso639_2(input?: string | null): string | null {
-  if (!input) return null;
-  const clean = input.trim().toLowerCase().split(/[-_]/)[0];
-  const matched = LANGUAGE_LOOKUP.get(clean);
-  if (matched) {
-    return matched.iso639_2;
-  }
-  if (/^[a-z]{3}$/.test(clean)) {
+  const def = lookupDefinition(input);
+  if (def) return def.iso639_2;
+
+  const clean = cleanLanguageInput(input);
+  if (clean && /^[a-z]{3}$/.test(clean) && !UNDETERMINED.has(clean)) {
     return clean;
   }
   return null;
@@ -94,16 +293,23 @@ export function toIso639_2(input?: string | null): string | null {
  * Returns English language name for an ISO code/name if matched.
  */
 export function getLanguageName(input?: string | null): string | null {
-  if (!input) return null;
-  const clean = input.trim().toLowerCase().split(/[-_]/)[0];
-  const matched = LANGUAGE_LOOKUP.get(clean);
-  return matched ? matched.name : null;
+  return canonicalizeLanguage(input)?.name ?? null;
 }
 
-/** Validate API input and return the canonical ISO-639-1 code. */
+/** Native (endonym) display name when known. */
+export function getLanguageNativeName(input?: string | null): string | null {
+  return canonicalizeLanguage(input)?.nativeName ?? null;
+}
+
+/**
+ * Validate API language input against the accepted language table.
+ * Unlike toIso639_1, unknown 2-letter codes are rejected (returns null).
+ */
 export function parseLanguageParam(input?: string | null): string | null {
   if (!input?.trim()) return null;
-  return LANGUAGE_LOOKUP.get(input.trim().toLowerCase().split(/[-_]/)[0])?.iso639_1 || null;
+  // "original" is a special filter, not a language
+  if (input.trim().toLowerCase() === "original") return null;
+  return canonicalizeLanguage(input)?.code ?? null;
 }
 
 /**

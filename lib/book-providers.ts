@@ -135,7 +135,7 @@ export async function batchSearchBooksByProvider(input: {
       limit,
       query,
       language: language || "",
-    }, "v1");
+    });
 
     processableItems.push({
       index: i,

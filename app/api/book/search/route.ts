@@ -4,13 +4,14 @@ import {
   parseProvider,
   searchBooksByProvider,
   type NormalizedSearchResponse,
-} from "@/lib/v0/book-providers";
+} from "@/lib/book-providers";
 import {
   buildLogicalCacheKey,
   CACHE_TTL_SEARCH,
   getCachedResponse,
   setCachedResponse,
 } from "@/lib/redis-cache";
+import { parseLanguageParam } from "@/lib/languages";
 
 export const runtime = "nodejs";
 
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
       ? Math.min(Math.max(parseInt(limitParam, 10), 1), 50)
       : 10;
 
-    if (limitParam && (isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1)) {
+    if (limitParam && (isNaN(parseInt(limitParam, 10)) || parseInt(limitParam, 10) < 1 || parseInt(limitParam, 10) > 50)) {
       return NextResponse.json(
         { error: "Invalid limit parameter. Must be a number between 1 and 50" },
         { status: 400 }
@@ -82,8 +83,8 @@ export async function GET(req: NextRequest) {
     const languageParam = searchParams.get("language");
     language = languageParam?.trim() || undefined;
     if (language) {
-      const code = language.toLowerCase().split(/[-_]/)[0] || "";
-      if (!/^[a-z]{2,3}$/.test(code)) {
+      const code = parseLanguageParam(language);
+      if (!code) {
         return NextResponse.json(
           {
             error:
@@ -92,6 +93,7 @@ export async function GET(req: NextRequest) {
           { status: 400 }
         );
       }
+      language = code;
     }
 
     const cacheKey = buildLogicalCacheKey("search_books", {
@@ -102,7 +104,7 @@ export async function GET(req: NextRequest) {
       limit,
       query: query.trim(),
       language: language || "",
-    }, "v0");
+    });
     const cachedData = await getCachedResponse(cacheKey);
 
     if (cachedData) {

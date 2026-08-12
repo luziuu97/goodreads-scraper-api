@@ -12,7 +12,6 @@ import { JsonViewer } from "@/components/ui/json-viewer";
 import { Play, Copy, Check, Terminal, Clock, Code, FileCode, CheckCircle2 } from "lucide-react";
 
 export function ApiStudio() {
-  const [apiVersion, setApiVersion] = useState<"v0" | "v1">("v1");
   const [selectedEndpointId, setSelectedEndpointId] = useState<string>("search-books");
   const [params, setParams] = useState<Record<string, string>>({});
   const [postBody, setPostBody] = useState<string>("");
@@ -112,10 +111,6 @@ export function ApiStudio() {
         url = `/api/series/${encodeURIComponent(slug)}?${queryParams.toString()}`;
       }
 
-      if (apiVersion === "v1") {
-        url = url.replace(/^\/api\//, "/api/v1/");
-      }
-
       const res = await fetch(url, options);
       const endTime = performance.now();
       setRequestTime(Math.round(endTime - startTime));
@@ -155,30 +150,8 @@ export function ApiStudio() {
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-1">
-            <button
-              onClick={() => setApiVersion("v0")}
-              className={`px-3 py-1 rounded text-xs font-semibold transition-all ${
-                apiVersion === "v0"
-                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              v0 (Live Aggregate)
-            </button>
-            <button
-              onClick={() => setApiVersion("v1")}
-              className={`px-3 py-1 rounded text-xs font-semibold transition-all ${
-                apiVersion === "v1"
-                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              v1 (Canonical DB)
-            </button>
-          </div>
           <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-xs px-2.5 py-1">
-            Base URL: {apiVersion === "v1" ? "/api/v1" : "/api"}
+            Base URL: /api
           </Badge>
         </div>
       </div>
