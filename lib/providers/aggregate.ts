@@ -1332,6 +1332,7 @@ export async function getDetailsAggregate(
         const hcSeries = parseSeriesLabel(
           typeof hardcoverBook.series === "string" ? hardcoverBook.series : null
         );
+        const hcSeriesBooksCount = (hardcoverBook as any).seriesBooksCount || null;
         if (hcSeries.name) {
           if (!Array.isArray(book.series) || book.series.length === 0) {
             book.series = [
@@ -1344,21 +1345,69 @@ export async function getDetailsAggregate(
                 name: hcSeries.name,
                 position: hcSeries.position,
                 isPrimary: true,
+                maxPosition: hcSeriesBooksCount || hcSeries.position || null,
+                primaryBooksCount: hcSeriesBooksCount || null,
               },
             ];
-          } else if (hcSeries.position != null) {
-            // Fill null positions left by the Goodreads import (always NULL).
+          } else {
             book.series = book.series.map((entry: any) => {
               const sameName =
                 normalizeSearchText(entry?.name || "") ===
                 normalizeSearchText(hcSeries.name || "");
-              if (sameName && (entry.position == null || entry.position === "")) {
-                return { ...entry, position: hcSeries.position };
-              }
-              return entry;
+              const pos = sameName && (entry.position == null || entry.position === "")
+                ? hcSeries.position
+                : entry.position;
+              const maxPos = Math.max(
+                entry.maxPosition ?? 0,
+                entry.primaryBooksCount ?? 0,
+                hcSeriesBooksCount ?? 0,
+                pos ?? 0
+              ) || entry.maxPosition || hcSeriesBooksCount || null;
+              const primaryCount = Math.max(
+                entry.primaryBooksCount ?? 0,
+                entry.maxPosition ?? 0,
+                hcSeriesBooksCount ?? 0
+              ) || entry.primaryBooksCount || hcSeriesBooksCount || null;
+              return {
+                ...entry,
+                position: pos,
+                maxPosition: maxPos,
+                primaryBooksCount: primaryCount,
+              };
             });
           }
+        } else if (Array.isArray(book.series) && hcSeriesBooksCount) {
+          book.series = book.series.map((entry: any) => ({
+            ...entry,
+            maxPosition: Math.max(entry.maxPosition ?? 0, hcSeriesBooksCount) || entry.maxPosition || hcSeriesBooksCount,
+            primaryBooksCount: Math.max(entry.primaryBooksCount ?? 0, hcSeriesBooksCount) || entry.primaryBooksCount || hcSeriesBooksCount,
+          }));
         }
+
+        const hcPublisher =
+          (hardcoverBook as any).publishedBy ||
+          (hardcoverBook as any).publisher ||
+          (hardcoverBook as any).edition?.publisher;
+        if (hcPublisher) {
+          if (!book.publisher) book.publisher = hcPublisher;
+          if (book.matchedEdition && !book.matchedEdition.publisher) {
+            book.matchedEdition.publisher = hcPublisher;
+          }
+        }
+
+        const hcPages =
+          typeof hardcoverBook.pages === "number" && Number.isFinite(hardcoverBook.pages) && hardcoverBook.pages > 0
+            ? hardcoverBook.pages
+            : typeof (hardcoverBook as any).edition?.pages === "number" && Number.isFinite((hardcoverBook as any).edition.pages) && (hardcoverBook as any).edition.pages > 0
+              ? (hardcoverBook as any).edition.pages
+              : null;
+        if (hcPages) {
+          if (!book.pages) book.pages = hcPages;
+          if (book.matchedEdition && !book.matchedEdition.pages) {
+            book.matchedEdition.pages = hcPages;
+          }
+        }
+
         if (book.matchedEdition && hardcoverBook.asin) {
           book.matchedEdition.asin =
             book.matchedEdition.asin || hardcoverBook.asin || hardcoverBook.edition?.asin || null;

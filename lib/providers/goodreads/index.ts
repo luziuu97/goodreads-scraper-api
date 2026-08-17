@@ -240,6 +240,7 @@ export const goodreadsProvider: BookDataProvider = {
       workTitle: work.canonicalTitle,
       originalLanguage: work.originalLanguage,
       publicationYear: work.publicationYear,
+      originalPublicationYear: work.publicationYear ?? null,
       averageRating: work.averageRating,
       ratingsCount: work.ratingsCount,
       reviewsCount: work.reviewsCount,

@@ -32,6 +32,8 @@ export type NormalizedSearchBook = {
   readersCount?: number;
   ratingsCount?: number;
   publicationDate?: string;
+  publicationYear?: number | null;
+  originalPublicationYear?: number | null;
   genres?: string[];
   isbn?: string | null;
   isbn10?: string | null;

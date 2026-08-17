@@ -88,12 +88,30 @@ export function collapseWorkSeries(memberships: any[] | undefined) {
         : allMemberships
             .filter((m) => typeof m.position === "number" && Number.isFinite(m.position))
             .map((m) => m.position as number);
+    const booksCount =
+      typeof winner.series?.booksCount === "number" && winner.series.booksCount > 0
+        ? winner.series.booksCount
+        : null;
 
-    const maxPosition = validPositions.length > 0 ? Math.max(...validPositions) : null;
-    const primaryBooksCount =
+    const maxPosFromMemberships = validPositions.length > 0 ? Math.max(...validPositions) : null;
+    const countFromMemberships =
       allMemberships.filter((m) => m.isPrimary).length > 0
         ? allMemberships.filter((m) => m.isPrimary).length
         : null;
+
+    const maxPosition =
+      Math.max(
+        maxPosFromMemberships ?? 0,
+        countFromMemberships ?? 0,
+        booksCount ?? 0
+      ) || maxPosFromMemberships || booksCount;
+
+    const primaryBooksCount =
+      Math.max(
+        countFromMemberships ?? 0,
+        booksCount ?? 0,
+        maxPosFromMemberships ?? 0
+      ) || countFromMemberships || booksCount;
 
     return {
       id: winner.series.id,
@@ -403,6 +421,8 @@ export function canonicalWorkToSearchBook(
     ratingsCount: work.ratingsCount ?? undefined,
     publicationDate:
       edition?.publicationDate || (work.publicationYear ? String(work.publicationYear) : undefined),
+    publicationYear: work.publicationYear ?? null,
+    originalPublicationYear: work.publicationYear ?? null,
     genres: normalizeAndRankCategories(
       work.genres.map((item: any) => item.genre.name),
       5
@@ -714,6 +734,7 @@ export function canonicalWorkToDetails(
       rating: roundRating(work.averageRating),
       ratingsCount: work.ratingsCount,
       publicationYear: work.publicationYear,
+      originalPublicationYear: work.publicationYear ?? null,
       publicationDate: edition?.publicationDate || (work.publicationYear ? String(work.publicationYear) : null),
       publisher: edition?.publisher || null,
       pages: edition?.pages || null,

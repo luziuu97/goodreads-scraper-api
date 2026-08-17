@@ -234,6 +234,7 @@ export type HardcoverNormalizedBookDetails = {
     cover: string;
     series: string;
     seriesURL: string;
+    seriesBooksCount?: number | null;
     pages: number | null;
     audioLength?: string | null;
     audioLengthMinutes?: number | null;
@@ -1771,6 +1772,8 @@ export async function fetchHardcoverBookDetails(
       series {
         name
         slug
+        books_count
+        primary_books_count
       }
     }
     book_series {
@@ -1780,6 +1783,8 @@ export async function fetchHardcoverBookDetails(
       series {
         name
         slug
+        books_count
+        primary_books_count
       }
     }
     contributions {
@@ -1853,6 +1858,12 @@ export async function fetchHardcoverBookDetails(
             cover: toCoverUrl(edition.image || null) || toCoverUrl(book.image),
             series,
             seriesURL,
+            seriesBooksCount:
+              (book.featured_book_series?.series as any)?.primary_books_count ??
+              (book.featured_book_series?.series as any)?.books_count ??
+              (book.book_series?.find((s: any) => s.series?.name?.trim())?.series as any)?.primary_books_count ??
+              (book.book_series?.find((s: any) => s.series?.name?.trim())?.series as any)?.books_count ??
+              null,
             pages: typeof edition.pages === "number" ? edition.pages : null,
             audioLength: audioInfo.audioLength,
             audioLengthMinutes: audioInfo.audioLengthMinutes,
