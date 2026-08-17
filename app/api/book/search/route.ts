@@ -95,13 +95,14 @@ export async function GET(req: NextRequest) {
       language = code;
     }
 
+    const searchQuery = query.trim();
     const cacheKey = buildLogicalCacheKey("search_books", {
       coverSelection: "prefer-external-v2",
       editionSelection: "language-ranked-v1",
       provider,
       type,
       limit,
-      query: query.trim(),
+      query: searchQuery,
       language: language || "",
     });
     const { value: responseData, cache } = await getOrSetCached(
@@ -110,7 +111,7 @@ export async function GET(req: NextRequest) {
       () =>
         searchBooksByProvider({
           provider,
-          query: query.trim(),
+          query: searchQuery,
           limit,
           type,
           language,

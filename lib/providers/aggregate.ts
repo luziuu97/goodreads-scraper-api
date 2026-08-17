@@ -39,6 +39,7 @@ import type {
 import {
   isCompilationOrDerivativeTitle,
   isGoodreadsCoverUrl,
+  isIsbnIdentitySearch,
   isTextInLanguage,
   stripAlternateCoverNotes,
   toApiBookFormat,
@@ -615,13 +616,14 @@ export async function searchAggregate(
   input: BookSearchInput
 ): Promise<NormalizedSearchResponse> {
   const targetLanguage = input.language ? toIso639_1(input.language) : null;
+  const isIsbnQuery = isIsbnIdentitySearch(input.query);
   let localBooks: NormalizedSearchBook[] = [];
   // Postgres is the canonical read-through store. A local hit is complete for
   // this request and avoids spending provider quota or adding network latency —
   // but only when the results pass a completeness threshold.
   try {
     localBooks = await searchCanonicalBooks(input);
-    const matchingLocalBooks = targetLanguage
+    const matchingLocalBooks = targetLanguage && !isIsbnQuery
       ? localBooks.filter(
           (book) =>
             toIso639_1(book.languageCode || book.language) === targetLanguage
@@ -643,7 +645,6 @@ export async function searchAggregate(
     // ISBN lookups can short-circuit on a complete local row. Free-text title
     // searches always consult Hardcover so reader-popularity ranking can promote
     // the primary novel over local noise / low-traffic title collisions.
-    const isIsbnQuery = Boolean(normalizeIsbn(input.query));
     const allComplete =
       !rejectedIncompletePresentation &&
       localBooks.length > 0 &&
@@ -770,8 +771,8 @@ export async function searchAggregate(
 
   // `language` is a filter, not merely a ranking hint. Providers which cannot
   // prove the language of a hit must not leak a default English work into the
-  // response.
-  const languageFiltered = targetIso1
+  // response. ISBN queries identify a specific edition and skip this filter.
+  const languageFiltered = targetIso1 && !exactQueryIsbn
     ? merged.filter(
         (book) => toIso639_1(book.languageCode || book.language) === targetIso1
       )

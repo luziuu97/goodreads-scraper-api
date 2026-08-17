@@ -1606,14 +1606,8 @@ export async function searchHardcoverBooks(input: {
   const presentationLanguage = languagePref || "en";
 
   if (effectiveType === "isbn") {
-    const result = await searchHardcoverBooksByIsbn(effectiveQuery, input.limit);
-    if (!languagePref) {
-      return result;
-    }
-    const books = result.books.filter(
-      (book) => toIso639_1(book.languageCode || book.language) === languagePref
-    );
-    return { totalResults: books.length, books };
+    // ISBN identifies a specific edition. Do not drop it when language differs.
+    return searchHardcoverBooksByIsbn(effectiveQuery, input.limit);
   }
 
   // A language request must be backed by an edition in that language, including
@@ -2230,7 +2224,7 @@ export async function fetchHardcoverBookCovers(
       imageId: imageMeta.imageId,
       format: toApiBookFormat(
         edition.edition_format,
-        edition.reading_format?.format
+        (edition as any).reading_format?.format
       ),
       isbn: trimToNull(edition.isbn_13),
       isbn10: trimToNull(edition.isbn_10),

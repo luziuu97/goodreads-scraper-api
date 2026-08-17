@@ -1,6 +1,7 @@
 import {
   authorsAgree,
   isGoodreadsCoverUrl,
+  isIsbnIdentitySearch,
   normalizeSearchText,
   normalizeValidIsbn,
   pickBestCoverUrl,
@@ -28,6 +29,13 @@ describe('canonical metadata contracts', () => {
     expect(normalizeValidIsbn('978-0-261-10325-2')).toBe('9780261103252');
     expect(normalizeValidIsbn('9780261103253')).toBeNull();
     expect(normalizeValidIsbn('0-261-10325-3')).toBe('0261103253');
+  });
+
+  test('treats checksum-valid ISBNs as identity searches', () => {
+    expect(isIsbnIdentitySearch('978-0-261-10325-2')).toBe(true);
+    expect(isIsbnIdentitySearch('0261103253')).toBe(true);
+    expect(isIsbnIdentitySearch('9780261103253')).toBe(false);
+    expect(isIsbnIdentitySearch('A Game of Thrones')).toBe(false);
   });
 
   test('normalizes ISO-1, ISO-3, and BCP-47 language input', () => {

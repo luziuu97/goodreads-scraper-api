@@ -21,7 +21,7 @@ export const searchBooksApiParameters: Parameter[] = [
     type: "string",
     required: false,
     description:
-      "Optional ISO language filter (en, es, …). Results must have an edition in that language, which supplies title, cover, and translator metadata.",
+      "Optional ISO language filter (en, es, …). Title and author results must have an edition in that language, which supplies title, cover, and translator metadata. ISBN lookups ignore this filter and always return the matching edition.",
     placeholder: "es",
   },
   {

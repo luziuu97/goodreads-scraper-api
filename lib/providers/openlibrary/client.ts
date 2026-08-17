@@ -8,6 +8,7 @@ import type {
   NormalizedSearchBook,
 } from "@/lib/providers/types";
 
+import { isIsbnIdentitySearch } from "@/lib/canonical/constants";
 import { languageFields, toIso639_1, toIso639_2 } from "@/lib/languages";
 
 const OPEN_LIBRARY_BASE = "https://openlibrary.org";
@@ -103,7 +104,7 @@ export async function searchOpenLibrary(
   const iso1Language = toIso639_1(input.language);
 
   let url = `${OPEN_LIBRARY_BASE}/search.json?q=${queryParam}&limit=${limit}`;
-  if (iso3Language) {
+  if (iso3Language && !isIsbnIdentitySearch(input.query)) {
     url += `&language=${encodeURIComponent(iso3Language)}`;
   }
 

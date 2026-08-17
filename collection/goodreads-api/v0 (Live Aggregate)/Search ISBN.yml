@@ -6,6 +6,8 @@ info:
 docs: |
   Use type=isbn when the query is an ISBN. Details key is still the ISBN,
   even if `id` is a canonical UUID and edition.id is 0.
+  `language` is ignored for ISBN lookups so a Spanish ISBN still matches
+  when the app always sends language=en (and vice versa).
 
 http:
   method: GET

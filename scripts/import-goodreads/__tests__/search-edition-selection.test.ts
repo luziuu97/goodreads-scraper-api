@@ -1,4 +1,5 @@
 import { rankEditionsForPresentation } from "@/lib/canonical/edition-selection";
+import { canonicalWorkToSearchBook } from "@/lib/canonical/reader";
 
 const editions = [
   {
@@ -52,5 +53,47 @@ describe("search edition presentation ranking", () => {
     });
 
     expect(ranked[0].id).toBe("es");
+  });
+});
+
+describe("ISBN search presentation", () => {
+  const work = {
+    id: "work-1",
+    canonicalTitle: "Water Moon",
+    originalLanguage: "en",
+    averageRating: 4.1,
+    ratingsCount: 1000,
+    publicationYear: 2025,
+    contributors: [{ isPrimary: true, author: { name: "Samantha Sotto Yambao" } }],
+    seriesMemberships: [],
+    translations: [{ language: "es", title: "Las furias invisibles del corazón" }],
+    titles: [],
+    genres: [],
+    externalIds: [{ provider: "hardcover", externalId: "1" }],
+    editions,
+  };
+
+  it("returns the ISBN edition even when language prefers a different one", () => {
+    const book = canonicalWorkToSearchBook(
+      work,
+      "es",
+      "9780857505347",
+      "9780857505347"
+    );
+
+    expect(book.isbn).toBe("9780857505347");
+    expect(book.languageCode).toBe("en");
+    expect(book.presentation).toBe("isbn");
+  });
+
+  it("presents the ISBN edition title when language is not applied", () => {
+    const book = canonicalWorkToSearchBook(
+      work,
+      undefined,
+      "9780857505347",
+      "9780857505347"
+    );
+
+    expect(book.title).toBe("Water Moon");
   });
 });

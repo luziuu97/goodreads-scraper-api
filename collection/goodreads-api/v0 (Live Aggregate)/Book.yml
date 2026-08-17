@@ -3,12 +3,6 @@ info:
   type: http
   seq: 3
 
-docs: |
-  Path should be ISBN-13 (or ISBN-10). Not a Hardcover numeric id.
-  Returns matchedEdition + availableLanguages. No editions[] or translations[].
-  Pass language= to select title/description/edition in that language.
-  Use /formats and /covers for the catalog.
-
 http:
   method: GET
   url: "{{url}}/api/book/details/:isbn"
@@ -26,7 +20,7 @@ http:
       type: query
       disabled: true
     - name: isbn
-      value: "9781649374042"
+      value: "9783423437714"
       type: path
   auth: inherit
 
@@ -35,3 +29,9 @@ settings:
   timeout: 0
   followRedirects: true
   maxRedirects: 5
+
+docs: |
+  Path should be ISBN-13 (or ISBN-10). Not a Hardcover numeric id.
+  Returns matchedEdition + availableLanguages. No editions[] or translations[].
+  Pass language= to select title/description/edition in that language.
+  Use /formats and /covers for the catalog.

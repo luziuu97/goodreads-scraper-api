@@ -5,6 +5,7 @@ info:
 
 docs: |
   Prefer one item per ISBN for library imports. Store isbn from each hit.
+  ISBN items return the matching edition even when `language` does not match.
   HTTP 200 even when some items fail — check results[].success.
 
 http:

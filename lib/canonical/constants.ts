@@ -155,6 +155,11 @@ export function normalizeValidIsbn(raw?: string | null): string | null {
   return null;
 }
 
+/** ISBN queries identify a specific edition and ignore the language filter. */
+export function isIsbnIdentitySearch(query?: string | null): boolean {
+  return Boolean(normalizeValidIsbn(query));
+}
+
 /**
  * Normalize provider format labels into the internal BookFormat enum.
  * Pass Hardcover `edition_format` as rawFormat and `reading_format.format`

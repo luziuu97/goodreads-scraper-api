@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { isIgnoredAuthor, selectBestCover, toApiBookFormat, toApiFormatLabel } from "@/lib/canonical/constants";
-import { canonicalWorkToSearchBook } from "@/lib/canonical/reader";
+import { canonicalWorkToSearchBook, collapseWorkSeries } from "@/lib/canonical/reader";
 import { languageFields } from "@/lib/languages";
 import type {
   BookCoversInput,
@@ -65,7 +65,7 @@ export const goodreadsProvider: BookDataProvider = {
       ...textSearchCondition,
     };
 
-    if (language) {
+    if (language && !isIsbn) {
       const targetLang = language.toLowerCase();
       whereClause.AND = [
         {
@@ -106,7 +106,12 @@ export const goodreadsProvider: BookDataProvider = {
     });
 
     return works.map((work) => {
-      const searchBook = canonicalWorkToSearchBook(work, language, undefined, query);
+      const searchBook = canonicalWorkToSearchBook(
+        work,
+        isIsbn ? undefined : language,
+        isIsbn ? cleanIsbn : undefined,
+        query
+      );
       return {
         ...searchBook,
         provider: "goodreads" as const,
@@ -158,7 +163,18 @@ export const goodreadsProvider: BookDataProvider = {
           include: { genre: true },
         },
         seriesMemberships: {
-          include: { series: true },
+          include: {
+            series: {
+              include: {
+                memberships: {
+                  select: {
+                    position: true,
+                    isPrimary: true,
+                  },
+                },
+              },
+            },
+          },
         },
       },
     });
@@ -174,7 +190,20 @@ export const goodreadsProvider: BookDataProvider = {
               contributors: { include: { author: true } },
               editions: { include: { covers: true } },
               genres: { include: { genre: true } },
-              seriesMemberships: { include: { series: true } },
+              seriesMemberships: {
+                include: {
+                  series: {
+                    include: {
+                      memberships: {
+                        select: {
+                          position: true,
+                          isPrimary: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -236,12 +265,7 @@ export const goodreadsProvider: BookDataProvider = {
           role: a.role,
         })),
       genres: work.genres.map((g) => g.genre.name),
-      series: work.seriesMemberships.map((s) => ({
-        id: s.series.id,
-        name: s.series.canonicalName,
-        slug: s.series.slug,
-        position: s.position,
-      })),
+      series: collapseWorkSeries(work.seriesMemberships),
       editions: work.editions.map((ed) => ({
         id: ed.id,
         title: ed.title,

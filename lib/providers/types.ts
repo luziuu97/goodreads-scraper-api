@@ -154,8 +154,9 @@ export type BookSearchInput = {
   limit: number;
   type: string;
   /**
-   * Optional ISO language filter (e.g. es, en). Search hits must have an
-   * edition in that language and use it for presentation metadata.
+   * Optional ISO language filter (e.g. es, en). Title and author hits must
+   * have an edition in that language and use it for presentation metadata.
+   * ISBN queries identify a specific edition and ignore this filter.
    */
   language?: string;
 };
@@ -164,6 +165,7 @@ export type BookDetailsInput = {
   slug: string;
   editionId?: number;
   language?: string;
+  refresh?: boolean;
 };
 
 export type BookCoversInput = {
@@ -172,6 +174,7 @@ export type BookCoversInput = {
   limit: number;
   /** When true (default), omit editions with no cover URL. */
   onlyWithCover: boolean;
+  refresh?: boolean;
 };
 
 /** Series hit from structured search (distinct from book search results). */

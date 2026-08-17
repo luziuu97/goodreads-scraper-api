@@ -5,9 +5,21 @@ import {
   buildLogicalCacheKey,
   CACHE_TTL_COVER,
   getOrSetCached,
+  purgeBookCache,
+  setCachedResponse,
 } from "@/lib/redis-cache";
 
 export const revalidate = 3600;
+
+function parseRefreshParam(req: NextRequest): boolean {
+  const refreshVal =
+    req.nextUrl.searchParams.get("forceRefresh") ??
+    req.nextUrl.searchParams.get("refresh") ??
+    req.nextUrl.searchParams.get("clean");
+  if (!refreshVal) return false;
+  const normalized = refreshVal.trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
 
 function parseBooleanParam(value: string | null, defaultValue: boolean): boolean {
   if (value === null || value.trim() === "") {
@@ -72,30 +84,51 @@ export async function GET(
       );
     }
 
+    const forceRefresh = parseRefreshParam(req);
+
     const cacheKey = buildLogicalCacheKey("get_book_covers", {
       provider,
       slug: decodedSlug,
       limit,
       onlyWithCover: onlyWithCover ? "1" : "0",
     });
-    const { value: responseBody, cache } = await getOrSetCached(
-      cacheKey,
-      CACHE_TTL_COVER,
-      () =>
-        getBookCoversByProvider({
-          provider,
-          slug: decodedSlug,
-          limit,
-          onlyWithCover,
-        })
-    );
+
+    let responseBody: any;
+    let cacheStatus: string;
+
+    if (forceRefresh) {
+      await purgeBookCache(decodedSlug);
+      responseBody = await getBookCoversByProvider({
+        provider,
+        slug: decodedSlug,
+        limit,
+        onlyWithCover,
+        refresh: true,
+      });
+      await setCachedResponse(cacheKey, responseBody, CACHE_TTL_COVER);
+      cacheStatus = "REFRESHED";
+    } else {
+      const cachedResult = await getOrSetCached(
+        cacheKey,
+        CACHE_TTL_COVER,
+        () =>
+          getBookCoversByProvider({
+            provider,
+            slug: decodedSlug,
+            limit,
+            onlyWithCover,
+          })
+      );
+      responseBody = cachedResult.value;
+      cacheStatus = cachedResult.cache;
+    }
 
     const apiResponse = NextResponse.json(responseBody);
     apiResponse.headers.set(
       "Cache-Control",
       "public, s-maxage=86400, stale-while-revalidate=604800"
     );
-    apiResponse.headers.set("X-Cache", cache);
+    apiResponse.headers.set("X-Cache", cacheStatus);
 
     return apiResponse;
   } catch (error) {

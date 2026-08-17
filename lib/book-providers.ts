@@ -257,15 +257,16 @@ export async function getBookDetailsByProvider(input: {
   slug: string;
   editionId?: number;
   language?: string;
+  refresh?: boolean;
 }): Promise<NormalizedBookDetailsResponse> {
-  const { provider, slug, editionId: rawEditionId, language } = input;
+  const { provider, slug, editionId: rawEditionId, language, refresh } = input;
   const editionId = rawEditionId && rawEditionId > 0 ? rawEditionId : undefined;
 
   if (provider === "aggregate") {
-    return getDetailsAggregate({ slug, editionId, language });
+    return getDetailsAggregate({ slug, editionId, language, refresh });
   }
 
-  return getDetailsByProviderId(provider, { slug, editionId, language });
+  return getDetailsByProviderId(provider, { slug, editionId, language, refresh });
 }
 
 export async function getBookCoversByProvider(input: {
@@ -273,14 +274,15 @@ export async function getBookCoversByProvider(input: {
   slug: string;
   limit: number;
   onlyWithCover: boolean;
+  refresh?: boolean;
 }): Promise<NormalizedBookCoversResponse> {
-  const { provider, slug, limit, onlyWithCover } = input;
+  const { provider, slug, limit, onlyWithCover, refresh } = input;
 
   if (provider === "aggregate") {
-    return getCoversAggregate({ slug, limit, onlyWithCover });
+    return getCoversAggregate({ slug, limit, onlyWithCover, refresh });
   }
 
-  return getCoversByProviderId(provider, { slug, limit, onlyWithCover });
+  return getCoversByProviderId(provider, { slug, limit, onlyWithCover, refresh });
 }
 
 export async function searchSeriesByProvider(input: {

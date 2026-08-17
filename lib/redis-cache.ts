@@ -369,6 +369,31 @@ export async function clearEndpointCache(endpoint: string): Promise<void> {
   }
 }
 
+export async function purgeBookCache(slug: string): Promise<void> {
+  const norm = normalizeCachePart(slug);
+  if (!norm) return;
+
+  for (const key of memoryCache.keys()) {
+    if (key.includes(norm)) {
+      memoryCache.delete(key);
+    }
+  }
+
+  const client = await getReadyRedisClient();
+  if (!client) return;
+
+  try {
+    const keys = await client.keys(`*${norm}*`);
+    if (keys.length > 0) {
+      await client.del(...keys);
+    }
+  } catch (error) {
+    if (error instanceof Error && !error.message.includes("Stream isn't writeable")) {
+      console.error('Redis purge error:', error);
+    }
+  }
+}
+
 export async function clearAllCache(): Promise<void> {
   memoryCache.clear();
   const client = await getReadyRedisClient();

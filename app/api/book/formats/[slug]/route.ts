@@ -7,12 +7,23 @@ import {
   buildLogicalCacheKey,
   CACHE_TTL_FORMATS,
   getCachedResponse,
+  purgeBookCache,
   setCachedResponse,
 } from "@/lib/redis-cache";
 import { toApiBookFormat, toApiFormatLabel } from "@/lib/canonical/constants";
 import { getLanguageName, languageFields, parseLanguageParam, toIso639_1 } from "@/lib/languages";
 
 export const revalidate = 3600;
+
+function parseRefreshParam(req: NextRequest): boolean {
+  const refreshVal =
+    req.nextUrl.searchParams.get("forceRefresh") ??
+    req.nextUrl.searchParams.get("refresh") ??
+    req.nextUrl.searchParams.get("clean");
+  if (!refreshVal) return false;
+  const normalized = refreshVal.trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
 
 /**
  * GET /api/book/formats/:slug
@@ -83,114 +94,123 @@ export async function GET(
       );
     }
 
+    const forceRefresh = parseRefreshParam(req);
+
     const cacheKey = buildLogicalCacheKey("get_book_formats", {
       slug: decodedSlug,
       limit,
       language: language?.trim() || "",
       format: format?.trim() || "",
     });
-    const cachedData = await getCachedResponse(cacheKey);
 
-    if (cachedData) {
-      const cachedResponse = NextResponse.json(cachedData);
-      cachedResponse.headers.set(
-        "Cache-Control",
-        "public, s-maxage=86400, stale-while-revalidate=604800"
-      );
-      cachedResponse.headers.set("X-Cache", "HIT");
-      return cachedResponse;
+    if (forceRefresh) {
+      await purgeBookCache(decodedSlug);
+    } else {
+      const cachedData = await getCachedResponse(cacheKey);
+
+      if (cachedData) {
+        const cachedResponse = NextResponse.json(cachedData);
+        cachedResponse.headers.set(
+          "Cache-Control",
+          "public, s-maxage=86400, stale-while-revalidate=604800"
+        );
+        cachedResponse.headers.set("X-Cache", "HIT");
+        return cachedResponse;
+      }
     }
 
     // Only serve local editions when the work is trusted and not a thin
     // backup-only row; otherwise fall through to Hardcover.
-    try {
-      const localWork = await findCanonicalWork(decodedSlug);
-      const trustedLocal =
-        localWork &&
-        workHasTrustedSource(localWork) &&
-        localWork.editions.length > 0 &&
-        (localWork.editions.length > 1 ||
-          localWork.editions.some((edition) => edition.asin));
-      if (localWork && trustedLocal) {
-        const requestedLanguage =
-          language?.trim().toLowerCase() === "original"
-            ? "original"
-            : toIso639_1(language) || language?.trim().toLowerCase() || null;
-        const requestedFormat = format?.trim().toUpperCase() || null;
-        const formats = localWork.editions
-          .filter((edition) => {
-            const languageMatches =
-              !requestedLanguage ||
-              requestedLanguage === "original" ||
-              toIso639_1(edition.language) === requestedLanguage;
-            const formatMatches =
-              !requestedFormat ||
-              edition.format === requestedFormat ||
-              (requestedFormat === "PHYSICAL" &&
-                ["HARDCOVER", "PAPERBACK"].includes(edition.format));
-            return languageMatches && formatMatches;
-          })
-          .slice(0, limit)
-          .map((edition, index) => {
-            const cover =
-              edition.covers.find((item) => item.isDefault) || edition.covers[0];
-            return {
-              editionId: index + 1,
-              title: edition.title,
-              format: toApiBookFormat(edition.format),
-              formatLabel: toApiFormatLabel(edition.format),
-              editionFormat: toApiFormatLabel(edition.format),
-              readingFormat: null,
-              ...languageFields(edition.language),
-              country: null,
-              countryCode: null,
-              isbn: edition.isbn13,
-              isbn10: edition.isbn10,
-              asin: edition.asin,
-              pages: edition.pages,
-              publicationDate: edition.publicationDate,
-              publisher: edition.publisher,
-              cover: cover?.url || "",
-              usersCount: null,
-            };
-          });
+    if (!forceRefresh) {
+      try {
+        const localWork = await findCanonicalWork(decodedSlug);
+        const trustedLocal =
+          localWork &&
+          workHasTrustedSource(localWork) &&
+          localWork.editions.length > 0 &&
+          (localWork.editions.length > 1 ||
+            localWork.editions.some((edition) => edition.asin));
+        if (localWork && trustedLocal) {
+          const requestedLanguage =
+            language?.trim().toLowerCase() === "original"
+              ? "original"
+              : toIso639_1(language) || language?.trim().toLowerCase() || null;
+          const requestedFormat = format?.trim().toUpperCase() || null;
+          const formats = localWork.editions
+            .filter((edition) => {
+              const languageMatches =
+                !requestedLanguage ||
+                requestedLanguage === "original" ||
+                toIso639_1(edition.language) === requestedLanguage;
+              const formatMatches =
+                !requestedFormat ||
+                edition.format === requestedFormat ||
+                (requestedFormat === "PHYSICAL" &&
+                  ["HARDCOVER", "PAPERBACK"].includes(edition.format));
+              return languageMatches && formatMatches;
+            })
+            .slice(0, limit)
+            .map((edition, index) => {
+              const cover =
+                edition.covers.find((item) => item.isDefault) || edition.covers[0];
+              return {
+                editionId: index + 1,
+                title: edition.title,
+                format: toApiBookFormat(edition.format),
+                formatLabel: toApiFormatLabel(edition.format),
+                editionFormat: toApiFormatLabel(edition.format),
+                readingFormat: null,
+                ...languageFields(edition.language),
+                country: null,
+                countryCode: null,
+                isbn: edition.isbn13,
+                isbn10: edition.isbn10,
+                asin: edition.asin,
+                pages: edition.pages,
+                publicationDate: edition.publicationDate,
+                publisher: edition.publisher,
+                cover: cover?.url || "",
+                usersCount: null,
+              };
+            });
 
-        const responseBody = {
-          success: true as const,
-          scrapedURL: `canonical://work/${localWork.id}`,
-          book: { id: localWork.id, slug: localWork.slug, title: localWork.canonicalTitle },
-          formats,
-          filters: {
-            language: requestedLanguage,
-            resolvedLanguage:
-              requestedLanguage === "original"
-                ? toIso639_1(localWork.originalLanguage)
-                : requestedLanguage,
-            originalLanguage: toIso639_1(localWork.originalLanguage),
-            format: requestedFormat?.toLowerCase() || null,
-          },
-          availableLanguages: Array.from(
-            new Set(
-              localWork.editions
-                .map((edition) => toIso639_1(edition.language))
-                .filter((code): code is string => Boolean(code))
+          const responseBody = {
+            success: true as const,
+            scrapedURL: `canonical://work/${localWork.id}`,
+            book: { id: localWork.id, slug: localWork.slug, title: localWork.canonicalTitle },
+            formats,
+            filters: {
+              language: requestedLanguage,
+              resolvedLanguage:
+                requestedLanguage === "original"
+                  ? toIso639_1(localWork.originalLanguage)
+                  : requestedLanguage,
+              originalLanguage: toIso639_1(localWork.originalLanguage),
+              format: requestedFormat?.toLowerCase() || null,
+            },
+            availableLanguages: Array.from(
+              new Set(
+                localWork.editions
+                  .map((edition) => toIso639_1(edition.language))
+                  .filter((code): code is string => Boolean(code))
+              )
             )
-          )
-            .sort()
-            .map((code) => ({ code, name: getLanguageName(code) || code })),
-          availableFormats: Array.from(
-            new Set(localWork.editions.map((edition) => toApiBookFormat(edition.format)))
-          ).sort((a, b) => (a === "other" ? 1 : b === "other" ? -1 : a.localeCompare(b))),
-          totalEditions: localWork.editions.length,
-          totalMatched: formats.length,
-        };
-        await setCachedResponse(cacheKey, responseBody, CACHE_TTL_FORMATS);
-        const databaseResponse = NextResponse.json(responseBody);
-        databaseResponse.headers.set("X-Cache", "DATABASE");
-        return databaseResponse;
+              .sort()
+              .map((code) => ({ code, name: getLanguageName(code) || code })),
+            availableFormats: Array.from(
+              new Set(localWork.editions.map((edition) => toApiBookFormat(edition.format)))
+            ).sort((a, b) => (a === "other" ? 1 : b === "other" ? -1 : a.localeCompare(b))),
+            totalEditions: localWork.editions.length,
+            totalMatched: formats.length,
+          };
+          await setCachedResponse(cacheKey, responseBody, CACHE_TTL_FORMATS);
+          const databaseResponse = NextResponse.json(responseBody);
+          databaseResponse.headers.set("X-Cache", "DATABASE");
+          return databaseResponse;
+        }
+      } catch (error) {
+        console.error("Canonical format lookup failed; falling back to Hardcover:", error);
       }
-    } catch (error) {
-      console.error("Canonical format lookup failed; falling back to Hardcover:", error);
     }
 
     if (!getHardcoverApiToken()) {
@@ -226,7 +246,7 @@ export async function GET(
       "Cache-Control",
       "public, s-maxage=86400, stale-while-revalidate=604800"
     );
-    apiResponse.headers.set("X-Cache", "MISS");
+    apiResponse.headers.set("X-Cache", forceRefresh ? "REFRESHED" : "MISS");
 
     // Edition metadata changes rarely — formats tier = 30 days.
     await setCachedResponse(cacheKey, responseBody, CACHE_TTL_FORMATS);

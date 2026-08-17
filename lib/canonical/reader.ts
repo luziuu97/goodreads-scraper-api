@@ -14,7 +14,22 @@ import { rankEditionsForPresentation } from "@/lib/canonical/edition-selection";
 
 const workInclude = {
   contributors: { include: { author: true }, orderBy: { position: "asc" as const } },
-  seriesMemberships: { include: { series: { include: { translations: true, externalIds: true } } } },
+  seriesMemberships: {
+    include: {
+      series: {
+        include: {
+          translations: true,
+          externalIds: true,
+          memberships: {
+            select: {
+              position: true,
+              isPrimary: true,
+            },
+          },
+        },
+      },
+    },
+  },
   translations: true,
   titles: true,
   editions: { include: { covers: true, externalIds: true } },
@@ -59,12 +74,35 @@ export function collapseWorkSeries(memberships: any[] | undefined) {
       ranked
         .map((item) => item.position)
         .find((value) => typeof value === "number" && Number.isFinite(value)) ?? null;
+
+    const allMemberships: Array<{ position: number | null; isPrimary: boolean }> =
+      winner.series?.memberships || [];
+
+    const primaryPositions = allMemberships
+      .filter((m) => m.isPrimary && typeof m.position === "number" && Number.isFinite(m.position))
+      .map((m) => m.position as number);
+
+    const validPositions =
+      primaryPositions.length > 0
+        ? primaryPositions
+        : allMemberships
+            .filter((m) => typeof m.position === "number" && Number.isFinite(m.position))
+            .map((m) => m.position as number);
+
+    const maxPosition = validPositions.length > 0 ? Math.max(...validPositions) : null;
+    const primaryBooksCount =
+      allMemberships.filter((m) => m.isPrimary).length > 0
+        ? allMemberships.filter((m) => m.isPrimary).length
+        : null;
+
     return {
       id: winner.series.id,
       slug: winner.series.slug,
       name: winner.series.canonicalName,
       position,
       isPrimary: Boolean(winner.isPrimary || ranked.some((item) => item.isPrimary)),
+      maxPosition,
+      primaryBooksCount,
     };
   });
 }
@@ -453,16 +491,20 @@ export async function searchCanonicalBooks(
   }
 
   const targetLang = input.language ? toIso639_1(input.language) : null;
+  // An ISBN identifies one edition. Keep that hit even when the caller always
+  // sends a language that does not match the edition.
+  const presentationLanguage = isbn ? undefined : input.language;
 
   let mapped = works
-    .map((work) => canonicalWorkToSearchBook(work, input.language, isbn, query))
+    .map((work) => canonicalWorkToSearchBook(work, presentationLanguage, isbn, query))
     .filter(
       (book) => !isCompilationOrDerivativeTitle(book.title, book.workTitle)
     );
 
   // Strict language presentation when requested: only works that resolved to
-  // an edition in that language.
-  if (targetLang) {
+  // an edition in that language. ISBN lookups skip this — they already matched
+  // a specific edition.
+  if (targetLang && !isbn) {
     mapped = mapped.filter(
       (book) => toIso639_1(book.languageCode || book.language) === targetLang
     );
@@ -472,10 +514,10 @@ export async function searchCanonicalBooks(
   const pool =
     mapped.length > 0
       ? mapped
-      : targetLang
+      : targetLang && !isbn
         ? []
         : works.map((work) =>
-            canonicalWorkToSearchBook(work, input.language, isbn, query)
+            canonicalWorkToSearchBook(work, presentationLanguage, isbn, query)
           );
 
   return pool

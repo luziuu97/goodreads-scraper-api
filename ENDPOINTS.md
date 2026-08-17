@@ -78,7 +78,7 @@ Display names are on `formatLabel` (`"Hardcover"`, `"Ebook"`). You will not get 
 
 - `languageCode` is an ISO code (`en`, `es`, `fr`).
 - `language` is the English display name (`English`, `Spanish`).
-- Pass `language=es` (the code) on search, details, formats, and series. It is a **strict filter**, not a ranking hint.
+- Pass `language=es` (the code) on search, details, formats, and series. On title/author search it is a **strict filter**, not a ranking hint. ISBN search always returns the matching edition regardless of `language`.
 
 ### Contributors
 

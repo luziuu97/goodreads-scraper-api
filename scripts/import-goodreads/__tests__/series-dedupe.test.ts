@@ -80,4 +80,37 @@ describe('collapseWorkSeries', () => {
 
     expect(series).toHaveLength(2);
   });
+
+  test('calculates maxPosition and primaryBooksCount from series memberships', () => {
+    const series = collapseWorkSeries([
+      {
+        position: 1,
+        isPrimary: true,
+        series: {
+          id: 'robert-langdon',
+          slug: 'robert-langdon',
+          canonicalName: 'Robert Langdon',
+          memberships: [
+            { position: 1, isPrimary: true },
+            { position: 2, isPrimary: true },
+            { position: 3, isPrimary: true },
+            { position: 3.5, isPrimary: false },
+            { position: 4, isPrimary: true },
+            { position: 5, isPrimary: true },
+          ],
+        },
+      },
+    ]);
+
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      id: 'robert-langdon',
+      slug: 'robert-langdon',
+      name: 'Robert Langdon',
+      position: 1,
+      isPrimary: true,
+      maxPosition: 5,
+      primaryBooksCount: 5,
+    });
+  });
 });

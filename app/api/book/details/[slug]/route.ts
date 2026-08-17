@@ -5,11 +5,23 @@ import {
   buildLogicalCacheKey,
   CACHE_TTL_DETAILS,
   getOrSetCached,
+  purgeBookCache,
+  setCachedResponse,
 } from "@/lib/redis-cache";
 import { parseLanguageParam } from "@/lib/languages";
 
 export const revalidate = 3600;
 export const dynamic = "force-dynamic";
+
+function parseRefreshParam(req: NextRequest): boolean {
+  const refreshVal =
+    req.nextUrl.searchParams.get("forceRefresh") ??
+    req.nextUrl.searchParams.get("refresh") ??
+    req.nextUrl.searchParams.get("clean");
+  if (!refreshVal) return false;
+  const normalized = refreshVal.trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
 
 export async function GET(
   req: NextRequest,
@@ -57,31 +69,52 @@ export async function GET(
     }
 
     const editionId = rawEditionId && rawEditionId > 0 ? rawEditionId : undefined;
+    const forceRefresh = parseRefreshParam(req);
+    const decodedSlug = decodeURIComponent(slug);
 
     const cacheKey = buildLogicalCacheKey("get_book_details", {
       provider,
-      slug: decodeURIComponent(slug),
+      slug: decodedSlug,
       editionId: editionId ?? "",
       language: language ?? "",
     });
-    const { value: responseBody, cache } = await getOrSetCached(
-      cacheKey,
-      CACHE_TTL_DETAILS,
-      () =>
-        getBookDetailsByProvider({
-          provider,
-          slug: decodeURIComponent(slug),
-          editionId,
-          language,
-        })
-    );
+
+    let responseBody: any;
+    let cacheStatus: string;
+
+    if (forceRefresh) {
+      await purgeBookCache(decodedSlug);
+      responseBody = await getBookDetailsByProvider({
+        provider,
+        slug: decodedSlug,
+        editionId,
+        language,
+        refresh: true,
+      });
+      await setCachedResponse(cacheKey, responseBody, CACHE_TTL_DETAILS);
+      cacheStatus = "REFRESHED";
+    } else {
+      const cachedResult = await getOrSetCached(
+        cacheKey,
+        CACHE_TTL_DETAILS,
+        () =>
+          getBookDetailsByProvider({
+            provider,
+            slug: decodedSlug,
+            editionId,
+            language,
+          })
+      );
+      responseBody = cachedResult.value;
+      cacheStatus = cachedResult.cache;
+    }
 
     const apiResponse = NextResponse.json(responseBody);
     apiResponse.headers.set(
       "Cache-Control",
       "public, s-maxage=86400, stale-while-revalidate=604800"
     );
-    apiResponse.headers.set("X-Cache", cache);
+    apiResponse.headers.set("X-Cache", cacheStatus);
 
     return apiResponse;
   } catch (error) {
