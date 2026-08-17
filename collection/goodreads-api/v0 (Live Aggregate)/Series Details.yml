@@ -10,7 +10,7 @@ docs: |
 
 http:
   method: GET
-  url: "{{url}}/api/series/:slug"
+  url: "{{url}}/api/series/details/:slug"
   params:
     - name: language
       value: original
@@ -30,6 +30,10 @@ http:
       disabled: true
     - name: provider
       value: aggregate
+      type: query
+      disabled: true
+    - name: refresh
+      value: "true"
       type: query
       disabled: true
     - name: slug

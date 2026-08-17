@@ -3,9 +3,14 @@ info:
   type: http
   seq: 1
 
+docs: |
+  Save `isbn` + `isbn10` + `languageCode` from the hit.
+  Do not persist Hardcover `id` (e.g. 714600) as the details key.
+  `language` is a strict filter. `format` on edition is lowercase.
+
 http:
   method: GET
-  url: "{{url}}/api/book/search?query=1984&type=all&language=de"
+  url: "{{url}}/api/book/search"
   params:
     - name: query
       value: "1984"
@@ -16,12 +21,17 @@ http:
     - name: language
       value: de
       type: query
+      disabled: true
     - name: limit
       value: "10"
       type: query
       disabled: true
     - name: provider
       value: aggregate
+      type: query
+      disabled: true
+    - name: refresh
+      value: "true"
       type: query
       disabled: true
   auth: inherit
@@ -31,8 +41,3 @@ settings:
   timeout: 0
   followRedirects: true
   maxRedirects: 5
-
-docs: |
-  Save `isbn` + `isbn10` + `languageCode` from the hit.
-  Do not persist Hardcover `id` (e.g. 714600) as the details key.
-  `language` is a strict filter. `format` on edition is lowercase.

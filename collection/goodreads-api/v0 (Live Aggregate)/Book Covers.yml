@@ -4,12 +4,12 @@ info:
   seq: 5
 
 docs: |
-  Cover gallery for the same ISBN used on details.
+  Cover gallery for the same slug/ISBN used on details.
   covers[].format is the book format (hardcover, ebook, …), not the image type.
 
 http:
   method: GET
-  url: "{{url}}/api/book/covers/:isbn"
+  url: "{{url}}/api/book/covers/:slug"
   params:
     - name: limit
       value: "20"
@@ -23,7 +23,11 @@ http:
       value: aggregate
       type: query
       disabled: true
-    - name: isbn
+    - name: refresh
+      value: "true"
+      type: query
+      disabled: true
+    - name: slug
       value: "9781649374042"
       type: path
   auth: inherit

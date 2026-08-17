@@ -5,16 +5,28 @@ info:
 
 docs: |
   Same work, Spanish presentation. Check title, descriptionLanguage, translators,
-  matchedEdition.languageCode, and a single series with position.
+  matchedEdition.languageCode, and series array with position, maxPosition, primaryBooksCount.
 
 http:
   method: GET
-  url: "{{url}}/api/book/details/:isbn?language=es"
+  url: "{{url}}/api/book/details/:slug"
   params:
     - name: language
       value: es
       type: query
-    - name: isbn
+    - name: provider
+      value: aggregate
+      type: query
+      disabled: true
+    - name: editionId
+      value: ""
+      type: query
+      disabled: true
+    - name: refresh
+      value: "true"
+      type: query
+      disabled: true
+    - name: slug
       value: "9788496208926"
       type: path
   auth: inherit

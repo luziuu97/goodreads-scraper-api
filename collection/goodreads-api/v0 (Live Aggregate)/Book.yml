@@ -3,9 +3,16 @@ info:
   type: http
   seq: 3
 
+docs: |
+  Path should be book slug, canonical work ID, or ISBN.
+  Returns matchedEdition, availableLanguages, and series array (with position, isPrimary, maxPosition, primaryBooksCount).
+  Pass language= to select presentation language for title/description/edition.
+  Pass editionId= to select a specific edition.
+  Pass refresh=true to bypass cache.
+
 http:
   method: GET
-  url: "{{url}}/api/book/details/:isbn"
+  url: "{{url}}/api/book/details/:slug"
   params:
     - name: language
       value: en
@@ -19,8 +26,12 @@ http:
       value: "30707731"
       type: query
       disabled: true
-    - name: isbn
-      value: "9783423437714"
+    - name: refresh
+      value: "true"
+      type: query
+      disabled: true
+    - name: slug
+      value: "the-alchemist"
       type: path
   auth: inherit
 
@@ -29,9 +40,3 @@ settings:
   timeout: 0
   followRedirects: true
   maxRedirects: 5
-
-docs: |
-  Path should be ISBN-13 (or ISBN-10). Not a Hardcover numeric id.
-  Returns matchedEdition + availableLanguages. No editions[] or translations[].
-  Pass language= to select title/description/edition in that language.
-  Use /formats and /covers for the catalog.

@@ -21,6 +21,10 @@ http:
       value: aggregate
       type: query
       disabled: true
+    - name: refresh
+      value: "true"
+      type: query
+      disabled: true
   auth: inherit
 
 settings:

@@ -10,7 +10,7 @@ docs: |
 
 http:
   method: GET
-  url: "{{url}}/api/book/formats/:isbn"
+  url: "{{url}}/api/book/formats/:slug"
   params:
     - name: language
       value: en
@@ -24,7 +24,15 @@ http:
       value: "50"
       type: query
       disabled: true
-    - name: isbn
+    - name: provider
+      value: aggregate
+      type: query
+      disabled: true
+    - name: refresh
+      value: "true"
+      type: query
+      disabled: true
+    - name: slug
       value: "9781649374042"
       type: path
   auth: inherit
