@@ -35,24 +35,35 @@ export async function resolveCanonicalByIsbn(
     select: {
       id: true,
       workId: true,
+      work: {
+        select: {
+          popularityScore: true,
+          ratingsCount: true,
+        },
+      },
     },
-    take: 2,
+    take: 20,
   });
+
+  if (editions.length === 0) return null;
 
   const workIds = new Set(editions.map((edition) => edition.workId));
   if (workIds.size > 1) {
-    console.error("Ambiguous canonical ISBN lookup", { isbn: cleanIsbn, workIds: [...workIds] });
-    return null;
+    console.warn("Ambiguous canonical ISBN lookup", { isbn: cleanIsbn, workIds: [...workIds] });
   }
 
-  const edition = editions[0];
-  if (edition) {
-    const result = { workId: edition.workId, editionId: edition.id };
-    await setCachedResponse(redisKey, result, LOOKUP_TTL);
-    return result;
-  }
+  const edition = editions.reduce((best, candidate) => {
+    const bestPop = best.work?.popularityScore ?? -1;
+    const candidatePop = candidate.work?.popularityScore ?? -1;
+    if (candidatePop !== bestPop) return candidatePop > bestPop ? candidate : best;
+    return (candidate.work?.ratingsCount ?? 0) > (best.work?.ratingsCount ?? 0)
+      ? candidate
+      : best;
+  });
 
-  return null;
+  const result = { workId: edition.workId, editionId: edition.id };
+  await setCachedResponse(redisKey, result, LOOKUP_TTL);
+  return result;
 }
 
 /**
