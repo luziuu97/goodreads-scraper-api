@@ -26,6 +26,25 @@ export const CACHE_TTL = CACHE_TTL_DETAILS;
 let redis: Redis | null = null;
 let redisReadyPromise: Promise<Redis | null> | null = null;
 let redisUnavailableUntil = 0;
+let redisIdleTimer: ReturnType<typeof setTimeout> | undefined;
+const REDIS_IDLE_DISCONNECT_MS = 30_000;
+
+function scheduleRedisIdleDisconnect() {
+  if (redisIdleTimer) clearTimeout(redisIdleTimer);
+  redisIdleTimer = setTimeout(() => {
+    const client = redis;
+    if (!client) return;
+    redis = null;
+    redisReadyPromise = null;
+    client.quit().catch(() => {
+      try {
+        client.disconnect();
+      } catch {
+        // ignore
+      }
+    });
+  }, REDIS_IDLE_DISCONNECT_MS);
+}
 const memoryCache = new LRUCache<string, string>({
   max: 400,
   maxSize: 2_000_000,
@@ -84,7 +103,7 @@ function getRedisClient(): Redis | null {
           const delay = Math.min(times * 50, 2000);
           return delay;
         },
-        lazyConnect: false,
+        lazyConnect: true,
         enableOfflineQueue: false,
       });
       
@@ -117,7 +136,10 @@ function getRedisClient(): Redis | null {
 async function getReadyRedisClient(): Promise<Redis | null> {
   const client = getRedisClient();
   if (!client) return null;
-  if (client.status === 'ready') return client;
+  if (client.status === 'ready') {
+    scheduleRedisIdleDisconnect();
+    return client;
+  }
   if (Date.now() < redisUnavailableUntil) return null;
 
   if (!redisReadyPromise) {
@@ -127,6 +149,7 @@ async function getReadyRedisClient(): Promise<Redis | null> {
         if (settled) return;
         settled = true;
         if (!value) redisUnavailableUntil = Date.now() + 5_000;
+        else scheduleRedisIdleDisconnect();
         clearTimeout(timeout);
         client.off('ready', onReady);
         client.off('end', onUnavailable);
@@ -138,6 +161,9 @@ async function getReadyRedisClient(): Promise<Redis | null> {
 
       client.once('ready', onReady);
       client.once('end', onUnavailable);
+      if (client.status === 'wait') {
+        client.connect().catch(() => finish(null));
+      }
     }).finally(() => {
       redisReadyPromise = null;
     });
