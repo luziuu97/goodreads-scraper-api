@@ -69,6 +69,16 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
+if (
+  process.env.RAILWAY_ENVIRONMENT === "production" &&
+  process.env.ALLOW_CATALOG_IMPORT !== "true"
+) {
+  console.error(
+    "Refusing to grow the production catalog. Set ALLOW_CATALOG_IMPORT=true to override."
+  );
+  process.exit(1);
+}
+
 const logger = createProgressLogger();
 const report = createReport(config);
 
